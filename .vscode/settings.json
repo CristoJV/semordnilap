@@ -1,0 +1,17 @@
+{
+    "ruff.lint.enable": true,
+    "ruff.organizeImports": true,
+    "ruff.path": ["ruff"],
+    "[python]": {
+        "diffEditor.ignoreTrimWhitespace": false,
+        "editor.defaultColorDecorators": "never",
+        "editor.formatOnSave": true,
+        "editor.wordBasedSuggestions": "off",
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.codeActionsOnSave": {
+            "source.organizeImports.ruff": "explicit"
+        },
+        "editor.rulers": [79, 72]
+    },
+    "terminal.integrated.fontFamily": "MesloLGS NF"
+}

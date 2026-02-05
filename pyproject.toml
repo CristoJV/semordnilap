@@ -1,0 +1,33 @@
+[project]
+name = "semordnilap"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "tqdm>=4.67.1",
+    "wordfreq>=3.1.1",
+]
+
+[project.scripts]
+semordnilap = "semordnilap:main"
+sp_extract = "semordnilap.extract:main"
+sp_find = "semordnilap.search_engine:main"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.1.0",
+    "isort>=7.0.0",
+    "jupyter>=1.1.1",
+    "mypy>=1.19.1",
+    "pylint>=4.0.4",
+    "ruff>=0.15.0",
+]
+
+[tool.ruff]
+line-length = 79
+target-version = "py313"
