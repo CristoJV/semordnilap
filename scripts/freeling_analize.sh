@@ -21,6 +21,7 @@ CFG="/usr/local/share/freeling/config/gl.cfg"
 CHUNK_LINES=5000
 PARALLEL_JOBS=4
 WORK_ROOT="$DST_DIR/.work"
+INVALID_ROOT="$DST_DIR/.invalid"
 
 # -------- SANITY CHECKS --------
 if [[ -z "$SRC_DIR" || -z "$DST_DIR" ]]; then
@@ -38,7 +39,7 @@ if [[ ! -f "$CFG" ]]; then
   exit 1
 fi
 
-mkdir -p "$DST_DIR"
+mkdir -p "$DST_DIR" "$WORK_ROOT" "$INVALID_ROOT"
 
 # -------- CLEANUP ON INTERRUPT --------
 trap 'echo; echo "⛔ Interrupted. Cleaning temporary files..."; find "$DST_DIR" -name "*.tmp" -delete; exit 130' INT
@@ -66,32 +67,42 @@ echo
 
 process_chunk() {
   chunk="$1"
-  CFG="$2"
+  INVALID_DIR="$2"
 
   part="$chunk.tok.part"
   tmp="$part.tmp"
 
-  [[ -f "$part" ]] && return 0
+  [[ -f "$part" ]] && exit 0
+  [[ -f "$chunk.invalid" ]] && exit 0
 
   rm -f "$tmp"
 
   if analyze -f "$CFG" --nortk < "$chunk" > "$tmp" 2>/dev/null \
      && [[ -s "$tmp" ]]; then
     mv "$tmp" "$part"
-  else
-    rm -f "$tmp"
-    echo "⚠ Error en $(basename "$chunk")"
-    return 1
+    exit 0
   fi
+
+  # ---- INVALID CHUNK ----
+  rm -f "$tmp"
+  mkdir -p "$INVALID_DIR"
+  mv "$chunk" "$INVALID_DIR"
+  touch "$chunk.invalid"
+  echo "⚠ Skipped invalid chunk: $(basename "$chunk")"
+  exit 0
 }
 export -f process_chunk
 export CFG
+
 # -------- MAIN PROCESSING LOOP --------
 find "$SRC_DIR" -type f -name "*.txt" -print0 \
 | while IFS= read -r -d '' file; do
+
     rel="${file#$SRC_DIR/}"
     out="$DST_DIR/${rel%.txt}.tok"
+
     workdir="$WORK_ROOT/${rel%.txt}"
+    invaliddir="$INVALID_ROOT/${rel%.txt}"
 
     # Skip if already processed
     if [[ -f "$out" ]]; then
@@ -100,8 +111,7 @@ find "$SRC_DIR" -type f -name "*.txt" -print0 \
       continue
     fi
 
-    mkdir -p "$(dirname "$out")"
-    mkdir -p "$workdir"
+    mkdir -p "$workdir" "$(dirname "$out")"
     
     # -------- SPLIT INTO CHUNKS (once) --------
     if [[ ! -f "$workdir/.split_done" ]]; then
@@ -115,21 +125,31 @@ find "$SRC_DIR" -type f -name "*.txt" -print0 \
 
     printf "\nProcesando: %.80s\n" "$rel"
 
-    # -------- PROCESS CHUNKS --------export CFG
+    # -------- PROCESS CHUNKS (PARALLEL) --------
+    export INVALID_DIR="$invaliddir"
+
     find "$workdir" -type f -name "chunk_*.txt" -print0 \
     | xargs -0 -n 1 -P "$PARALLEL_JOBS" bash -c '
-        process_chunk "$1" "$CFG"
+        process_chunk "$1" "$INVALID_DIR"
     ' _
 
-    # -------- CONCATENATE -------- 
-    num_chunks=$(ls "$workdir"/chunk_*.txt 2>/dev/null | wc -l)
-    num_parts=$(ls "$workdir"/chunk_*.txt.tok.part 2>/dev/null | wc -l)
+    # -------- CONCATENATE VALID PARTS (with invalid check) --------
+    chunks=( "$workdir"/chunk_*.txt )
+    parts=( "$workdir"/chunk_*.txt.tok.part )
+    invalids=( "$workdir"/chunk_*.invalid )
 
-    if [[ "$num_chunks" -gt 0 && "$num_chunks" -eq "$num_parts" ]]; then
-      cat "$workdir"/chunk_*.txt.tok.part > "$out"
+    num_chunks=${#chunks[@]}
+    num_parts=${#parts[@]}
+    num_invalid=${#invalids[@]}
+
+    if (( num_parts > 0 && num_parts + num_invalid == num_chunks )); then
+      cat "${parts[@]}" > "$out"
+      rm -rf "$workdir"
+    elif (( num_parts == 0 && num_invalid == num_chunks )); then
+      echo "⚠ All chunks invalid for: $rel (skipped)"
       rm -rf "$workdir"
     else
-      echo "⚠ Incomplete file ($num_parts/$num_chunks), resuming later: $rel"
+      echo "⚠ Incomplete file ($num_parts ok + $num_invalid invalid / $num_chunks total): $rel"
     fi
 
     ((count++))
