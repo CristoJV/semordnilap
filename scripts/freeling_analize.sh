@@ -64,6 +64,28 @@ progress_bar () {
 echo "📂 Total files to process: $TOTAL"
 echo 
 
+process_chunk() {
+  chunk="$1"
+  CFG="$2"
+
+  part="$chunk.tok.part"
+  tmp="$part.tmp"
+
+  [[ -f "$part" ]] && return 0
+
+  rm -f "$tmp"
+
+  if analyze -f "$CFG" --nortk < "$chunk" > "$tmp" 2>/dev/null \
+     && [[ -s "$tmp" ]]; then
+    mv "$tmp" "$part"
+  else
+    rm -f "$tmp"
+    echo "⚠ Error en $(basename "$chunk")"
+    return 1
+  fi
+}
+export -f process_chunk
+export CFG
 # -------- MAIN PROCESSING LOOP --------
 find "$SRC_DIR" -type f -name "*.txt" -print0 \
 | while IFS= read -r -d '' file; do
@@ -93,23 +115,11 @@ find "$SRC_DIR" -type f -name "*.txt" -print0 \
 
     printf "\nProcesando: %.80s\n" "$rel"
 
-    # -------- PROCESS CHUNKS --------
-    for chunk in "$workdir"/chunk_*.txt; do
-      part="$chunk.tok.part"
-      tmp="$part.tmp"
-
-      [[ -f "$part" ]] && continue
-
-      rm -f "$tmp"
-      printf "  ↳ chunk: %s\n" "$(basename "$chunk")"
-
-      if analyze -f "$CFG" --nortk < "$chunk" 2>/dev/null > "$tmp"; then
-        [[ -s "$tmp" ]] && mv "$tmp" "$part" || rm -f "$tmp"
-      else
-        rm -f "$tmp"
-        echo "⚠ Error en $(basename "$chunk")"
-      fi
-    done
+    # -------- PROCESS CHUNKS --------export CFG
+    find "$workdir" -type f -name "chunk_*.txt" -print0 \
+    | xargs -0 -n 1 -P "$PARALLEL_JOBS" bash -c '
+        process_chunk "$1" "$CFG"
+    ' _
 
     # -------- CONCATENATE -------- 
     num_chunks=$(ls "$workdir"/chunk_*.txt 2>/dev/null | wc -l)
