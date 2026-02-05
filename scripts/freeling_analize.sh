@@ -120,6 +120,7 @@ find "$SRC_DIR" -type f -name "*.txt" -print0 \
           --suffix-length=4 \
           --additional-suffix=.txt \
       "$file" "$workdir/chunk_"
+      ls "$workdir"/chunk_*.txt | wc -l > "$workdir/.num_chunks"
       touch "$workdir/.split_done"
     fi
 
@@ -134,11 +135,10 @@ find "$SRC_DIR" -type f -name "*.txt" -print0 \
     ' _
 
     # -------- CONCATENATE VALID PARTS (with invalid check) --------
-    chunks=( "$workdir"/chunk_*.txt )
+    num_chunks=$(cat "$workdir/.num_chunks")
     parts=( "$workdir"/chunk_*.txt.tok.part )
     invalids=( "$workdir"/chunk_*.invalid )
 
-    num_chunks=${#chunks[@]}
     num_parts=${#parts[@]}
     num_invalid=${#invalids[@]}
 
