@@ -47,51 +47,64 @@ def normalize_word(word: str):
 
 def decompositions_candidates(
     norm_target: str,
-    norm_words: set[str],
-    norm_to_origins: dict[str, set],
+    norm_ngrams: set[str],
+    maximum_ngrams: int = 3,
 ):
     solutions: list[list[str]] = []
     candidates: list[tuple[int, list[str]]] = [(0, [])]
 
     while candidates:
         i, phrase = candidates.pop()
+
         if i == len(norm_target):
             solutions.append(phrase)
             continue
+
+        if len(phrase) >= maximum_ngrams:  # Prune
+            continue
+
         for j in range(i + 1, len(norm_target) + 1):
             frag = norm_target[i:j]
-            if frag in norm_words:
-                for orig in norm_to_origins[frag]:
-                    candidates.append((j, phrase + [orig]))
-
+            if frag in norm_ngrams:
+                candidates.append((j, phrase + [frag]))
     return solutions
 
 
-def find_semordnilap(
-    words: list[str], threshold: float = 3.0
+def find_semordnilaps(
+    src_ngrams: set[str], dst_ngrams: set[str], threshold: float = 3.0
 ) -> dict[str, set[str]]:
-    norm_cache = {}
-    norm_to_origins = defaultdict(set)
+    # Stores normalized versions for each ngram
+    src_norm_cache = {}
+    src_norm_to_origins_dict = defaultdict(set)
+    dst_norm_cache = {}
+    dst_norm_to_origins_dict = defaultdict(set)
 
-    for w in words:
-        nw = norm_cache.setdefault(w, normalize_word(w))
-        norm_to_origins[nw].add(w)
-    norm_words = set(norm_to_origins.keys())
+    for g in src_ngrams:
+        ng = src_norm_cache.setdefault(g, normalize_word(g))
+        src_norm_to_origins_dict[ng].add(g)
+
+    for g in dst_ngrams:
+        ng = dst_norm_cache.setdefault(g, normalize_word(g))
+        dst_norm_to_origins_dict[ng].add(g)
+
+    dst_norm_ngrams = set(src_norm_to_origins_dict.keys())
 
     semordnilaps = defaultdict(set)
     palindromes = defaultdict(set)
 
-    for query_word in tqdm(words, desc="Analyzing words", total=len(words)):
-        norm_word = norm_cache[query_word]
-        r_query_word = norm_word[::-1]
+    for query_ngram in tqdm(
+        src_ngrams, desc="Analyzing words", total=len(src_ngrams)
+    ):
+        src_norm_ngram = src_norm_cache[query_ngram]
+        reversed_ngram = src_norm_ngram[::-1]
 
         solutions = decompositions_candidates(
-            r_query_word, norm_words, norm_to_origins
+            reversed_ngram, dst_norm_ngrams, 3
         )
 
         for sol in solutions:
             if zipf_frequency(" ".join(sol), "es") >= threshold:
-                semordnilaps[query_word].add(" ".join(sol))
+                semordnilaps[query_ngram].add(" ".join(sol))
 
     return semordnilaps, palindromes
 
@@ -145,8 +158,8 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Using: %s", opts)
 
     lexicon = load_lexicon(opts.lexicon_filepath)
-    semordnilaps, palindromes = find_semordnilap(
-        lexicon, threshold=opts.freq_treshold
+    semordnilaps, palindromes = find_semordnilaps(
+        lexicon, lexicon, threshold=opts.freq_treshold
     )
     semordnilaps = dict(
         sorted(semordnilaps.items(), key=lambda item: normalize_word(item[0]))
