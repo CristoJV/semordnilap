@@ -29,7 +29,7 @@ def filter_common_words(
 
 
 def normalize_word(word: str):
-    REMOVE_UNICODE_MARKS = set(
+    remove_unicode_marks = set(
         [
             "\u0301",  # acute  ´
             "\u0300",  # grave  `
@@ -38,7 +38,7 @@ def normalize_word(word: str):
         ]
     )
     word = unicodedata.normalize("NFD", word)
-    word = "".join(c for c in word if c not in REMOVE_UNICODE_MARKS)
+    word = "".join(c for c in word if c not in remove_unicode_marks)
     return unicodedata.normalize("NFC", word)
 
 
