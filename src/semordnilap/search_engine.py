@@ -1,6 +1,5 @@
 # %%
 import argparse
-import json
 import logging
 import sys
 import unicodedata
@@ -18,11 +17,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def load_lexicon(json_filepath: Path) -> object:
-    with open(json_filepath, "r", encoding="utf-8") as f:
-        lexicon = json.load(f)
-        return lexicon["words"]
-    return None
+def load_words(words_filepath: Path) -> object:
+    with open(words_filepath, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip()]
 
 
 def filter_common_words(
@@ -90,7 +87,6 @@ def find_semordnilaps(
     dst_norm_ngrams = set(dst_norm_to_origins_dict.keys())
 
     semordnilaps = defaultdict(set)
-    palindromes = defaultdict(set)
 
     for query_ngram in tqdm(
         src_ngrams, desc="Analyzing words", total=len(src_ngrams)
@@ -106,20 +102,16 @@ def find_semordnilaps(
             if zipf_frequency(" ".join(sol), "es") >= threshold:
                 semordnilaps[query_ngram].add(" ".join(sol))
 
-    return semordnilaps, palindromes
+    return semordnilaps
 
 
 def save_semordnilaps(
     output_file: str,
     semordnilaps: dict[str, set[str]],
-    palindromes: dict[str, set[str]],
 ):
     with open(output_file, "w", encoding="utf-8") as f:
         f.write(f"Total semordnilaps: {len(semordnilaps)}\n\n")
         for word, matches in semordnilaps.items():
-            f.write(f"{word} → {', '.join(sorted(matches))}\n")
-        f.write(f"\nTotal palindromes: {len(palindromes)}\n\n")
-        for word, matches in palindromes.items():
             f.write(f"{word} → {', '.join(sorted(matches))}\n")
 
 
@@ -176,14 +168,14 @@ def main(argv: list[str] | None = None) -> int:
     logger.info(
         "Loading source lexicon from: %s", opts.source_lexicon_filepath
     )
-    source_lexicon = load_lexicon(opts.source_lexicon_filepath)
+    source_lexicon = load_words(opts.source_lexicon_filepath)
     logger.info(
         "Loading target lexicon from: %s", opts.target_lexicon_filepath
     )
-    target_lexicon = load_lexicon(opts.target_lexicon_filepath)
+    target_lexicon = load_words(opts.target_lexicon_filepath)
 
     logger.info("Looking for semordnilaps...")
-    semordnilaps, palindromes = find_semordnilaps(
+    semordnilaps = find_semordnilaps(
         source_lexicon, target_lexicon, threshold=opts.freq_treshold
     )
 
@@ -191,14 +183,9 @@ def main(argv: list[str] | None = None) -> int:
     semordnilaps = dict(
         sorted(semordnilaps.items(), key=lambda item: normalize_word(item[0]))
     )
-    palindromes = dict(
-        sorted(palindromes.items(), key=lambda item: normalize_word(item[0]))
-    )
-
     logger.info("Saving semordnilaps at: %s", opts.out_filepath)
     save_semordnilaps(
         semordnilaps=semordnilaps,
-        palindromes=palindromes,
         output_file=opts.out_filepath,
     )
 
