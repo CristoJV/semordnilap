@@ -87,7 +87,7 @@ def find_semordnilaps(
         ng = dst_norm_cache.setdefault(g, normalize_word(g))
         dst_norm_to_origins_dict[ng].add(g)
 
-    dst_norm_ngrams = set(src_norm_to_origins_dict.keys())
+    dst_norm_ngrams = set(dst_norm_to_origins_dict.keys())
 
     semordnilaps = defaultdict(set)
     palindromes = defaultdict(set)
@@ -99,7 +99,7 @@ def find_semordnilaps(
         reversed_ngram = src_norm_ngram[::-1]
 
         solutions = decompositions_candidates(
-            reversed_ngram, dst_norm_ngrams, 3
+            reversed_ngram, dst_norm_ngrams, 1
         )
 
         for sol in solutions:
@@ -126,12 +126,23 @@ def save_semordnilaps(
 def build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser("Find semordnilaps")
     parser.add_argument(
-        "-l", "--lexicon", help="Lexicon filepath", required=True
+        "-s",
+        "--src",
+        dest="source_lexicon",
+        help="Source lexicon filepath",
+        required=True,
+    )
+    parser.add_argument(
+        "-t",
+        "--tgt",
+        dest="target_lexicon",
+        help="Target lexicon filepath",
+        required=False,
     )
     parser.add_argument("-o", "--out", help="Output filepath", required=True)
     parser.add_argument(
-        "-t",
-        "--th",
+        "-th",
+        "--threshold",
         help="N-gram freq threshold (default th = 0.3)",
         required=False,
         default=0.3,
@@ -142,7 +153,8 @@ def build_argparser() -> argparse.ArgumentParser:
 
 @dataclass
 class SearchOptions:
-    lexicon_filepath: str
+    source_lexicon_filepath: str
+    target_lexicon_filepath: str
     out_filepath: str
     freq_treshold: float = field(default=0.3)
 
@@ -150,17 +162,32 @@ class SearchOptions:
 def main(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
     args = build_argparser().parse_args(argv)
+
     opts = SearchOptions(
-        lexicon_filepath=args.lexicon,
+        source_lexicon_filepath=args.source_lexicon,
+        target_lexicon_filepath=args.target_lexicon
+        if args.target_lexicon
+        else args.source_lexicon,
         out_filepath=args.out,
-        freq_treshold=args.th,
+        freq_treshold=args.threshold,
     )
     logger.info("Using: %s", opts)
 
-    lexicon = load_lexicon(opts.lexicon_filepath)
-    semordnilaps, palindromes = find_semordnilaps(
-        lexicon, lexicon, threshold=opts.freq_treshold
+    logger.info(
+        "Loading source lexicon from: %s", opts.source_lexicon_filepath
     )
+    source_lexicon = load_lexicon(opts.source_lexicon_filepath)
+    logger.info(
+        "Loading target lexicon from: %s", opts.target_lexicon_filepath
+    )
+    target_lexicon = load_lexicon(opts.target_lexicon_filepath)
+
+    logger.info("Looking for semordnilaps...")
+    semordnilaps, palindromes = find_semordnilaps(
+        source_lexicon, target_lexicon, threshold=opts.freq_treshold
+    )
+
+    logger.info("Sorting semordnilaps...")
     semordnilaps = dict(
         sorted(semordnilaps.items(), key=lambda item: normalize_word(item[0]))
     )
@@ -168,6 +195,7 @@ def main(argv: list[str] | None = None) -> int:
         sorted(palindromes.items(), key=lambda item: normalize_word(item[0]))
     )
 
+    logger.info("Saving semordnilaps at: %s", opts.out_filepath)
     save_semordnilaps(
         semordnilaps=semordnilaps,
         palindromes=palindromes,
