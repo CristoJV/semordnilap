@@ -17,7 +17,7 @@ from tqdm import tqdm
 # ---------------------------------------------------------------------#
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 
@@ -109,6 +109,52 @@ def extract_spanish_section(
     return text[start:end]
 
 
+def extract_galician_section(text: str) -> str:
+    gl_re = re.compile(r"\{\{-(gl|glref)-\}\}", re.I)
+    if not text:
+        return None
+    m = gl_re.search(text)
+    if not m:
+        return None
+    start = m.end()
+    return text[start:]
+
+
+def extract_pos_from_galician(wikitext: str) -> set[str]:
+    son_re = re.compile(r"\{\{son\|\|\|gl\}\}", re.I)
+    gl_pos_re = re.compile(
+        r"\{\{-(?P<root>verbo|subst|adx|adv|prep|conx|interx|pron|num)(?P<feat>[a-z]*)-(?:\|gl)?\}\}",
+        re.I,
+    )
+    gl_pos_map = {
+        "subst": "sustantivo",
+        "verbo": "verbo",
+        "adx": "adjetivo",
+        "adv": "adverbio",
+        "prep": "preposición",
+        "conx": "conjunción",
+        "interx": "interjección",
+        "pron": "pronombre",
+        "num": "numeral",
+    }
+    if not wikitext:
+        return set()
+    m = son_re.search(wikitext)
+    if not m:
+        return set()
+    rest = wikitext[m.end() :]
+
+    m2 = gl_pos_re.search(rest)
+    if not m2:
+        return set()
+    key = m2.group("root").lower()
+
+    if key in gl_pos_map:
+        return {gl_pos_map[key]}
+
+    return set()
+
+
 def normalize_label(text: str) -> str:
     """Normalize template or heading names."""
     whitespace_re = re.compile(r"\s+")
@@ -154,6 +200,114 @@ class ExtractOptions:
     dump_filepath: str
     out_filepath: str
     max_pages: int
+    language: str
+
+
+def iter_gl_conj_templates(dump_path: str):
+    with bz2.open(dump_path, "rb") as f:
+        for _, elem in ET.iterparse(f, events=("end",)):
+            if not elem.tag.endswith("page"):
+                continue
+
+            ns = elem.findtext(".//{*}ns")
+            if ns != "10":
+                elem.clear()
+                continue
+
+            title = elem.findtext(".//{*}title") or ""
+            if not title.startswith("Modelo:conx.gl"):
+                elem.clear()
+                continue
+
+            text = elem.findtext(".//{*}text") or ""
+            yield title, text
+            elem.clear()
+
+
+def classify_conj_template(text: str) -> str:
+    """
+    Classify Galician conjugation templates.
+    pattern  -> parametric (uses {{{1}}})
+    lexical  -> closed list (no parameters)
+    """
+    param_re = re.compile(r"\{\{\{\s*1\s*(?:\||\}\})")
+    if param_re.search(text):
+        return "pattern"
+    return "lexical"
+
+
+def extract_regular_suffixes(template_text: str) -> set[str]:
+    suffix_re = re.compile(r"\{\{gl\|\{\{\{1\}\}\}([^\}]+)\}\}")
+    return {
+        m.group(1) for m in suffix_re.finditer(template_text) if m.group(1)
+    }
+
+
+def extract_irregular_forms(template_text: str) -> set[str]:
+    form_re = re.compile(r"\{\{gl\|([^\}\|]+)\}\}")
+    return {
+        m.group(1)
+        for m in form_re.finditer(template_text)
+        if m.group(1).isalpha()
+    }
+
+
+def build_conj_dict(dump_path: str) -> dict:
+    conj = {}
+
+    for title, text in iter_gl_conj_templates(dump_path):
+        name = title.replace("Modelo:", "")
+        kind = classify_conj_template(text)
+
+        if kind == "pattern":
+            conj[name] = {
+                "type": "pattern",
+                "terminations": sorted(extract_regular_suffixes(text)),
+            }
+        else:
+            conj[name] = {
+                "type": "lexical",
+                "formas": sorted(extract_irregular_forms(text)),
+            }
+
+    return conj
+
+
+def expand_galician_verb(
+    lemma: str,
+    wikitext: str,
+    conj_dict: dict,
+) -> set[str]:
+    conj_call_re = re.compile(
+        r"\{\{\s*(conx\.gl[^\|\}]+)(?:\|([^\}]+))?\s*\}\}",
+        re.I,
+    )
+    forms = set()
+
+    m = conj_call_re.search(wikitext)
+    if not m:
+        return forms
+
+    tmpl = m.group(1)
+    stem = m.group(2)
+
+    if tmpl not in conj_dict:
+        return forms
+
+    info = conj_dict[tmpl]
+
+    if info["type"] == "lexical":
+        forms.update(info["formas"])
+    else:
+        # pattern
+        if not stem:
+            # fallback: infer stem from lemma
+            stem = lemma[:-2] if lemma.endswith(("ar", "er", "ir")) else lemma
+
+        for suf in info["terminations"]:
+            forms.add(stem + suf)
+
+    return forms
 
 
 def iter_words_from_dump(
@@ -164,6 +318,8 @@ def iter_words_from_dump(
         total=total_bytes, unit="B", unit_scale=True, desc="Reading dump"
     )
     count = 0
+    dictionary = build_conj_dict(opts.dump_filepath)
+
     with open(opts.dump_filepath, "rb") as raw:
         wrapped = ProgressReader(raw, pbar)
         with bz2.open(wrapped, "rb") as f:
@@ -179,19 +335,40 @@ def iter_words_from_dump(
                 title = elem.findtext(".//{*}title") or ""
                 text = elem.findtext(".//{*}text") or ""
 
-                spanish = extract_spanish_section(text)
-                if not spanish:
-                    elem.clear()
-                    continue
+                if opts.language == "es":
+                    spanish = extract_spanish_section(text)
+                    if not spanish:
+                        elem.clear()
+                        continue
 
-                categories = extact_pos_bases_from_spanish(spanish)
+                    categories = extact_pos_bases_from_spanish(spanish)
 
-                if not categories.intersection(desired_categories):
-                    elem.clear()
-                    continue
+                    if not categories.intersection(desired_categories):
+                        elem.clear()
+                        continue
+                elif opts.language == "gl":
+                    galician = extract_galician_section(text)
 
+                    if not galician:
+                        elem.clear()
+                        continue
+                    if title == "abaixentar":
+                        categories = extract_pos_from_galician(galician)
+                        if not categories:
+                            elem.clear()
+                            continue
+                    categories = extract_pos_from_galician(galician)
+                    if not categories:
+                        elem.clear()
+                        continue
                 word = title.strip().lower()
                 yield word, categories
+
+                if opts.language == "gl" and "verbo" in categories:
+                    forms = expand_galician_verb(word, galician, dictionary)
+                    for f in forms:
+                        if is_clean_word(f):
+                            yield f, {"forma"}
 
                 count += 1
                 elem.clear()
@@ -220,6 +397,7 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("-d", "--dump", help="Dump filepath", required=True)
     parser.add_argument("-o", "--out", help="Output filepath", required=True)
     parser.add_argument("--max-pages", help="Page limit", default=0)
+    parser.add_argument("-l", "--language", help="Language code", default="es")
 
     return parser
 
@@ -232,6 +410,7 @@ def main(argv: list[str] | None = None) -> int:
         dump_filepath=args.dump,
         out_filepath=args.out,
         max_pages=args.max_pages,
+        language=args.language,
     )
 
     desired_categories = set(DEFAULT_DESIRED_CATEGORIES)
