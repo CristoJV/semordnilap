@@ -13,6 +13,7 @@ dependencies = [
 semordnilap = "semordnilap:main"
 sp_extract = "semordnilap.extract:main"
 sp_find = "semordnilap.search_engine:main"
+sp_prepare = "semordnilap.prepare_lexicon:main"
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]
