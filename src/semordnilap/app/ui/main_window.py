@@ -6,6 +6,7 @@ from semordnilap.app.logic.filtering import (
     filter_semordnilaps_sources,
     filter_semordnilaps_targets,
 )
+from semordnilap.app.logic.iteration import iter_source_target_pairs
 from semordnilap.app.logic.loader import load_semordnilaps, load_words_filter
 from semordnilap.app.logic.state import AppState
 
@@ -112,31 +113,50 @@ def _create_output_file():
         dpg.set_value("_pending_filter_kind", "")
 
 
-# def _run_filtering(over: str, filters: set[str] | None = None):
-#     if AppState.semordnilaps is None:
-#         _set_status("Semordnilaps not loaded", ok=False)
-#         return
+def _start_interactive():
+    if AppState.semordnilaps is None:
+        _set_status("Semordnilaps not loaded", ok=False)
+        return
 
-#     if filters is None:
-#         if AppState.words_filter is None:
-#             _set_status("Words filter not loaded", ok=False)
-#             return
-#         filters = AppState.words_filter
+    AppState.iterator = iter_source_target_pairs(AppState.semordnilaps)
 
-#     if over == "sources":
-#         filtered = filter_semordnilaps_sources(AppState.semordnilaps, filters)
-#         AppState.semordnilaps = filtered
-#         _set_status(
-#             f"Filtering sources completed ({len(filtered)} entries)",
-#             ok=True,
-#         )
-#     elif over == "targets":
-#         filtered = filter_semordnilaps_targets(AppState.semordnilaps, filters)
-#         AppState.semordnilaps = filtered
-#         _set_status(
-#             f"Filtering targets completed ({len(filtered)} entries)",
-#             ok=True,
-#         )
+    dpg.show_item("interactive_group")
+    _advance_pair()
+
+
+def _advance_pair():
+    try:
+        (
+            AppState.current_source_word,
+            AppState.current_target_word,
+        ) = next(AppState.iterator)
+
+        _update_interactive_buttons()
+
+    except StopIteration:
+        dpg.hide_item("interactive_group")
+        _set_status("Interactive filtering finished ✅", ok=True)
+
+
+def _filter_source_word():
+    AppState.source_words_filter.add(AppState.current_source_word)
+    _advance_pair()
+
+
+def _filter_target_word():
+    AppState.target_words_filter.add(AppState.current_target_word)
+    _advance_pair()
+
+
+def _update_interactive_buttons():
+    dpg.set_item_label(
+        "source_word_button",
+        AppState.current_source_word,
+    )
+    dpg.set_item_label(
+        "target_word_button",
+        AppState.current_target_word,
+    )
 
 
 def _run_filtering():
@@ -251,6 +271,41 @@ def build_ui():
             width=150,
             callback=_run_filtering,
         )
+        # --- START ---
+        dpg.add_button(
+            label="Start",
+            width=120,
+            callback=_start_interactive,
+        )
+
+        dpg.add_spacer(height=10)
+
+        # --- INTERACTIVE BUTTONS ---
+        with dpg.group(
+            horizontal=True,
+            show=False,
+            tag="interactive_group",
+        ):
+            dpg.add_button(
+                label="SOURCE",
+                tag="source_word_button",
+                width=300,
+                callback=_filter_source_word,
+            )
+
+            dpg.add_button(
+                label="TARGET",
+                tag="target_word_button",
+                width=600,
+                callback=_filter_target_word,
+            )
+
+            dpg.add_button(
+                label="CONTINUE",
+                tag="continue_word_button",
+                width=600,
+                callback=_advance_pair,
+            )
 
     with dpg.window(
         label="Confirm file creation",
