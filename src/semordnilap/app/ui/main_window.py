@@ -8,6 +8,7 @@ from semordnilap.app.logic.filtering import (
 )
 from semordnilap.app.logic.iteration import iter_source_target_pairs
 from semordnilap.app.logic.loader import load_semordnilaps, load_words_filter
+from semordnilap.app.logic.persistence import append_word_if_missing
 from semordnilap.app.logic.state import AppState
 
 SEMORDNILAPS_TAG = "semordnilaps_path"
@@ -60,9 +61,11 @@ def _load_words_filter(app_data, kind):
             words = load_words_filter(path)
             if kind == "source":
                 AppState.source_words_filter = words
+                AppState.source_words_filter_path = path
                 dpg.set_value(SOURCE_WORDS_FILTER_TAG, path)
             elif kind == "target":
                 AppState.target_words_filter = words
+                AppState.target_words_filter_path = path
                 dpg.set_value(TARGET_WORDS_FILTER_TAG, path)
             _set_status(
                 f"{kind.capitalize()} words filter loaded ({len(words)})", True
@@ -139,12 +142,36 @@ def _advance_pair():
 
 
 def _filter_source_word():
-    AppState.source_words_filter.add(AppState.current_source_word)
+    if AppState.source_words_filter_path is None:
+        _set_status("Source words filter file not set", ok=False)
+        return
+
+    word = AppState.current_source_word
+
+    append_word_if_missing(
+        filepath=AppState.source_words_filter_path,
+        word=word,
+        current_words=AppState.source_words_filter,
+    )
+
+    _set_status(f'Added "{word}" to source filter', ok=True)
     _advance_pair()
 
 
 def _filter_target_word():
-    AppState.target_words_filter.add(AppState.current_target_word)
+    if AppState.target_words_filter_path is None:
+        _set_status("Target words filter file not set", ok=False)
+        return
+
+    phrase = AppState.current_target_word
+
+    append_word_if_missing(
+        filepath=AppState.target_words_filter_path,
+        word=phrase,
+        current_words=AppState.target_words_filter,
+    )
+
+    _set_status(f'Added "{phrase}" to target filter', ok=True)
     _advance_pair()
 
 
