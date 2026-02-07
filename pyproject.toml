@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "dearpygui>=2.1.1",
     "tqdm>=4.67.1",
     "wordfreq>=3.1.1",
 ]
@@ -14,6 +15,7 @@ semordnilap = "semordnilap:main"
 sp_extract = "semordnilap.extract:main"
 sp_find = "semordnilap.search_engine:main"
 sp_prepare = "semordnilap.prepare_lexicon:main"
+sp_app = "semordnilap.app.app:run"
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]
