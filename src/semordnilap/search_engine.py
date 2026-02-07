@@ -1,5 +1,6 @@
 # %%
 import argparse
+import json
 import logging
 import sys
 import unicodedata
@@ -69,7 +70,7 @@ def decompositions_candidates(
 
 def find_semordnilaps(
     src_ngrams: set[str], dst_ngrams: set[str], threshold: float = 3.0
-) -> dict[str, set[str]]:
+) -> dict[str, dict[int, set[list[str]]]]:
     # Stores normalized versions for each ngram
     src_norm_cache = {}
     src_norm_to_origins_dict = defaultdict(set)
@@ -86,7 +87,9 @@ def find_semordnilaps(
 
     dst_norm_ngrams = set(dst_norm_to_origins_dict.keys())
 
-    semordnilaps = defaultdict(set)
+    semordnilaps: dict[str, dict[int, set[str]]] = defaultdict(
+        lambda: defaultdict(set)
+    )
 
     for query_ngram in tqdm(
         src_ngrams, desc="Analyzing words", total=len(src_ngrams)
@@ -99,8 +102,9 @@ def find_semordnilaps(
         )
 
         for sol in solutions:
-            if zipf_frequency(" ".join(sol), "es") >= threshold:
-                semordnilaps[query_ngram].add(" ".join(sol))
+            phrase = " ".join(sol)
+            word_count = len(sol)
+            semordnilaps[query_ngram][word_count].add(phrase)
 
     return semordnilaps
 
@@ -109,10 +113,15 @@ def save_semordnilaps(
     output_file: str,
     semordnilaps: dict[str, set[str]],
 ):
+    serializable = {
+        word: {
+            str(word_count): sorted(phrases)
+            for word_count, phrases in by_count.items()
+        }
+        for word, by_count in semordnilaps.items()
+    }
     with open(output_file, "w", encoding="utf-8") as f:
-        f.write(f"Total semordnilaps: {len(semordnilaps)}\n\n")
-        for word, matches in semordnilaps.items():
-            f.write(f"{word} → {', '.join(sorted(matches))}\n")
+        json.dump(serializable, f, indent=2, ensure_ascii=False)
 
 
 def build_argparser() -> argparse.ArgumentParser:
