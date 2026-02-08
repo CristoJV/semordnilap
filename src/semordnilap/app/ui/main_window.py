@@ -3,10 +3,14 @@ from pathlib import Path
 import dearpygui.dearpygui as dpg
 
 from semordnilap.app.logic.filtering import (
+    filter_pairs_sources,
+    filter_pairs_targets,
     filter_semordnilaps_sources,
     filter_semordnilaps_targets,
 )
-from semordnilap.app.logic.iteration import iter_source_target_pairs
+from semordnilap.app.logic.iteration import (
+    build_source_target_pairs,
+)
 from semordnilap.app.logic.loader import load_semordnilaps, load_words_filter
 from semordnilap.app.logic.persistence import append_word_if_missing
 from semordnilap.app.logic.state import AppState
@@ -121,23 +125,30 @@ def _start_interactive():
         _set_status("Semordnilaps not loaded", ok=False)
         return
 
-    AppState.iterator = iter_source_target_pairs(AppState.semordnilaps)
+    AppState.pairs = build_source_target_pairs(AppState.semordnilaps)
 
     dpg.show_item("interactive_group")
     _advance_pair()
 
 
 def _advance_pair():
-    try:
-        (
-            AppState.current_source_word,
-            AppState.current_target_word,
-        ) = next(AppState.iterator)
 
-        _update_interactive_buttons()
-
-    except StopIteration:
+    if not AppState.pairs:
+        _set_status("Interactive filtering finished ✅", ok=True)
         dpg.hide_item("interactive_group")
+        return
+
+    AppState.current_source_word, AppState.current_target_word = (
+        AppState.pairs[0]
+    )
+    _update_interactive_buttons()
+
+
+def _continue_pair():
+    if AppState.pairs:
+        AppState.pairs.pop(0)
+        _advance_pair()
+    else:
         _set_status("Interactive filtering finished ✅", ok=True)
 
 
@@ -154,6 +165,8 @@ def _filter_source_word():
         current_words=AppState.source_words_filter,
     )
 
+    AppState.pairs = filter_pairs_sources(AppState.pairs, {word})
+
     _set_status(f'Added "{word}" to source filter', ok=True)
     _advance_pair()
 
@@ -163,15 +176,17 @@ def _filter_target_word():
         _set_status("Target words filter file not set", ok=False)
         return
 
-    phrase = AppState.current_target_word
+    word = AppState.current_target_word
 
     append_word_if_missing(
         filepath=AppState.target_words_filter_path,
-        word=phrase,
+        word=word,
         current_words=AppState.target_words_filter,
     )
 
-    _set_status(f'Added "{phrase}" to target filter', ok=True)
+    AppState.pairs = filter_pairs_targets(AppState.pairs, {word})
+
+    _set_status(f'Added "{word}" to target filter', ok=True)
     _advance_pair()
 
 
@@ -327,12 +342,14 @@ def build_ui():
                 callback=_filter_target_word,
             )
 
-            dpg.add_button(
-                label="CONTINUE",
-                tag="continue_word_button",
-                width=600,
-                callback=_advance_pair,
-            )
+        dpg.add_spacer(height=5)
+
+        dpg.add_button(
+            label="continue",
+            tag="continue_word_button",
+            width=600,
+            callback=_continue_pair,
+        )
 
     with dpg.window(
         label="Confirm file creation",

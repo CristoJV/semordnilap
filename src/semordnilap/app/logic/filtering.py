@@ -46,3 +46,17 @@ def filter_semordnilaps_targets(
             result[word] = new_by_length
 
     return result
+
+
+def filter_pairs_sources(
+    pairs: list[str, str], words: set[str]
+) -> list[tuple[str, str]]:
+    pairs = [(s, t) for (s, t) in pairs if not should_filter_ngram(s, words)]
+    return pairs
+
+
+def filter_pairs_targets(
+    pairs: list[str, str], words: set[str]
+) -> list[tuple[str, str]]:
+    pairs = [(s, t) for (s, t) in pairs if not should_filter_ngram(t, words)]
+    return pairs

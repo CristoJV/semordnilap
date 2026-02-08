@@ -8,6 +8,8 @@ class AppState:
     source_words_filter_path: Path | None = None
     target_words_filter: set[str] | None = None
     target_words_filter_path: Path | None = None
-    iterator: Iterator[tuple[str, str]]
+
+    pairs: list[tuple[str, str]]
+    pairs_idx: int
     current_source_word: str | None = None
     current_target_word: str | None = None
