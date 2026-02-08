@@ -1,3 +1,4 @@
+from functools import partial
 from pathlib import Path
 
 import dearpygui.dearpygui as dpg
@@ -13,7 +14,7 @@ from semordnilap.app.logic.iteration import (
 )
 from semordnilap.app.logic.loader import load_semordnilaps, load_words_filter
 from semordnilap.app.logic.persistence import append_word_if_missing
-from semordnilap.app.logic.state import AppState
+from semordnilap.app.logic.state import AppState, Ngram
 
 SEMORDNILAPS_TAG = "semordnilaps_path"
 SOURCE_WORDS_FILTER_TAG = "source_words_filter_path"
@@ -144,9 +145,9 @@ def _advance_pair():
         dpg.hide_item("interactive_group")
         return
 
-    AppState.current_source_word, AppState.current_target_word = (
-        AppState.pairs[0]
-    )
+    current_pair = AppState.pairs[0]
+    AppState.current_source_ngram.set(current_pair[0])
+    AppState.current_target_ngram.set(current_pair[1])
     _update_interactive_buttons()
 
 
@@ -158,12 +159,10 @@ def _continue_pair():
         _set_status("Interactive filtering finished ✅", ok=True)
 
 
-def _filter_source_word():
+def _filter_source_word(word: str):
     if AppState.source_words_filter_path is None:
         _set_status("Source words filter file not set", ok=False)
         return
-
-    word = AppState.current_source_word
 
     append_word_if_missing(
         filepath=AppState.source_words_filter_path,
@@ -177,12 +176,11 @@ def _filter_source_word():
     _advance_pair()
 
 
-def _filter_target_word():
+def _filter_target_word(word: str):
+    print(word)
     if AppState.target_words_filter_path is None:
         _set_status("Target words filter file not set", ok=False)
         return
-
-    word = AppState.current_target_word
 
     append_word_if_missing(
         filepath=AppState.target_words_filter_path,
@@ -196,15 +194,90 @@ def _filter_target_word():
     _advance_pair()
 
 
+def _draw_ngram_buttons(parent: str, ngram: Ngram, on_click: callable):
+    dpg.delete_item(parent, children_only=True)
+
+    ngram_phrase = ngram.get_ngram()
+    tokens = ngram.get_tokens()
+    n = max(len(tokens), 1)
+
+    print(tokens)
+
+    def _callback(sender, app_data, user_data):
+        on_click(user_data)
+
+    dpg.add_button(
+        parent=parent,
+        label=ngram_phrase,
+        width=-1,
+        height=32,
+        user_data=ngram_phrase,
+        callback=_callback,
+    )
+
+    if n >= 2:
+        dpg.add_spacer(parent=parent, height=4)
+        with dpg.table(
+            parent=parent,
+            header_row=False,
+            resizable=False,
+            policy=dpg.mvTable_SizingStretchProp,
+            width=-1,
+        ):
+            for _ in tokens:
+                dpg.add_table_column(init_width_or_weight=1)
+
+            with dpg.table_row():
+                for token in tokens:
+                    dpg.add_button(
+                        label=token,
+                        width=-1,
+                        height=28,
+                        user_data=token,
+                        callback=_callback,
+                    )
+
+
+def _draw_source_target_table():
+    dpg.delete_item("interactive_table", children_only=True)
+
+    with dpg.table(
+        parent="interactive_table",
+        header_row=False,
+        resizable=False,
+        policy=dpg.mvTable_SizingStretchProp,
+        width=-1,
+    ):
+        dpg.add_table_column(init_width_or_weight=1)
+        dpg.add_table_column(init_width_or_weight=1)
+        with dpg.table_row():
+            with dpg.group(horizontal=True):
+                dpg.add_spacer(width=1)
+                dpg.add_text("Source")
+                dpg.add_spacer(width=1)
+
+            with dpg.group(horizontal=True):
+                dpg.add_spacer(width=1)
+                dpg.add_text("Target")
+                dpg.add_spacer(width=1)
+        with dpg.table_row():
+            with dpg.group():
+                _draw_ngram_buttons(
+                    parent=dpg.last_item(),
+                    ngram=AppState.current_source_ngram,
+                    on_click=_filter_source_word,
+                )
+
+            with dpg.group():
+                _draw_ngram_buttons(
+                    parent=dpg.last_item(),
+                    ngram=AppState.current_target_ngram,
+                    on_click=_filter_target_word,
+                )
+
+
 def _update_interactive_buttons():
-    dpg.set_item_label(
-        "source_word_button",
-        AppState.current_source_word,
-    )
-    dpg.set_item_label(
-        "target_word_button",
-        AppState.current_target_word,
-    )
+    _draw_source_target_table()
 
 
 def _run_filtering():
@@ -405,6 +478,7 @@ def build_ui():
                                 "target_filter_dialog"
                             ),
                         )
+
             dpg.add_spacer(height=15)
 
             with dpg.group(
@@ -430,24 +504,15 @@ def build_ui():
             dpg.add_spacer(height=10)
 
             # --- INTERACTIVE BUTTONS ---
-            with dpg.group(
-                horizontal=True,
-                show=False,
-                tag="interactive_group",
-            ):
-                dpg.add_button(
-                    label="SOURCE",
-                    tag="source_word_button",
-                    width=300,
-                    callback=_filter_source_word,
-                )
-
-                dpg.add_button(
-                    label="TARGET",
-                    tag="target_word_button",
-                    width=300,
-                    callback=_filter_target_word,
-                )
+            with dpg.group(show=False, tag="interactive_group"):
+                with dpg.child_window(
+                    tag="interactive_table",
+                    border=False,
+                    autosize_x=True,
+                    height=140,
+                    no_scrollbar=True,
+                ):
+                    pass
 
             dpg.add_spacer(height=5)
 
