@@ -131,6 +131,7 @@ def _start_interactive():
     AppState.pairs = build_source_target_pairs(AppState.semordnilaps)
 
     dpg.show_item("interactive_group")
+    dpg.show_item("continue_word_button")
     _advance_pair()
 
 
@@ -411,6 +412,7 @@ def build_ui():
                 tag="continue_word_button",
                 width=300,
                 callback=_continue_pair,
+                show=False,
             )
         with dpg.child_window(
             tag="footer",
