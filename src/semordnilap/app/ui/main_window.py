@@ -128,7 +128,9 @@ def _start_interactive():
         _set_status("Semordnilaps not loaded", ok=False)
         return
 
-    AppState.pairs = build_source_target_pairs(AppState.semordnilaps)
+    if AppState.pairs is None:
+        AppState.pairs = build_source_target_pairs(AppState.semordnilaps)
+        _set_status(f"Loaded pairs ({len(AppState.pairs)} entries)", ok=True)
 
     dpg.show_item("interactive_group")
     dpg.show_item("continue_word_button")
@@ -238,9 +240,36 @@ def _run_filtering():
         ok=True,
     )
 
+    AppState.pairs = build_source_target_pairs(AppState.semordnilaps)
+
 
 def _open_file_dialog(tag):
     dpg.show_item(tag)
+
+
+def _export_pairs_to_file(path: str):
+    if not AppState.pairs:
+        _set_status("No pairs to export", ok=False)
+        return
+    pairs = sorted(AppState.pairs, key=lambda x: (x[0], x[1]))
+
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            for source, target in pairs:
+                f.write(f"{source} ↔ {target}\n")
+        _set_status(f"Exported {len(pairs)} pairs to {path}", ok=True)
+    except Exception as e:
+        _set_status(f"Export failed: {e}", ok=False)
+
+
+def _export_dialog_selected(_, app_data):
+    directory = app_data["current_path"]
+    filename = app_data["file_name"]
+
+    if not filename:
+        _set_status("Export cancelled", ok=False)
+    path = str(Path(directory) / filename)
+    _export_pairs_to_file(path)
 
 
 def build_ui():
@@ -273,6 +302,17 @@ def build_ui():
         show=False,
         callback=_target_words_filter_selected,
         tag="target_filter_dialog",
+        width=700,
+        height=400,
+    ):
+        dpg.add_file_extension(".txt")
+
+    with dpg.file_dialog(
+        show=False,
+        callback=_export_dialog_selected,
+        tag="export_dialog",
+        directory_selector=False,
+        modal=True,
         width=700,
         height=400,
     ):
@@ -376,11 +416,15 @@ def build_ui():
                     width=100,
                     callback=_run_filtering,
                 )
-                # --- START ---
                 dpg.add_button(
                     label="Start",
                     width=100,
                     callback=_start_interactive,
+                )
+                dpg.add_button(
+                    label="Export",
+                    width=100,
+                    callback=lambda: dpg.show_item("export_dialog"),
                 )
 
             dpg.add_spacer(height=10)
