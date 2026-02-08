@@ -20,11 +20,14 @@ SOURCE_WORDS_FILTER_TAG = "source_words_filter_path"
 TARGET_WORDS_FILTER_TAG = "target_words_filter_path"
 STATUS_TAG = "status"
 
+HEADER_HEIGHT = 30
+FOOTER_HEIGHT = 30
+
 
 def _set_status(text, ok=True):
     dpg.set_value(STATUS_TAG, text)
     dpg.configure_item(
-        STATUS_TAG, color=(0, 200, 0, 255) if ok else (220, 0, 0, 255)
+        STATUS_TAG, color=(120, 220, 120, 255) if ok else (220, 120, 120, 255)
     )
 
 
@@ -260,6 +263,8 @@ def build_ui():
         show=False,
         callback=_source_words_filter_selected,
         tag="source_filter_dialog",
+        width=700,
+        height=400,
     ):
         dpg.add_file_extension(".txt")
 
@@ -267,90 +272,171 @@ def build_ui():
         show=False,
         callback=_target_words_filter_selected,
         tag="target_filter_dialog",
+        width=700,
+        height=400,
     ):
         dpg.add_file_extension(".txt")
 
     with dpg.window(
-        label="Semordnilaps filtering engine", width=1024, height=720
+        tag="main_window",
+        label="Semordnilaps filtering engine",
+        no_title_bar=True,
+        no_resize=True,
+        no_move=True,
     ):
-        dpg.add_text("", tag=STATUS_TAG)
-        dpg.add_spacer(height=5)
-
-        with dpg.group(horizontal=True):
-            dpg.add_text("semordnilaps file:")
-            dpg.add_text("No file selected", tag=SEMORDNILAPS_TAG)
-            dpg.add_spacer(width=20)
-            dpg.add_button(
-                label="Browse",
-                callback=lambda: _open_file_dialog("semordnilaps_dialog"),
-            )
-
-        dpg.add_spacer(height=5)
-
-        with dpg.group(horizontal=True):
-            dpg.add_text("Source words filter:")
-            dpg.add_text("No file selected", tag=SOURCE_WORDS_FILTER_TAG)
-            dpg.add_spacer(width=20)
-            dpg.add_button(
-                label="Browse",
-                callback=lambda: dpg.show_item("source_filter_dialog"),
-            )
-
-        dpg.add_spacer(height=5)
-
-        with dpg.group(horizontal=True):
-            dpg.add_text("Target words filter:")
-            dpg.add_text("No file selected", tag=TARGET_WORDS_FILTER_TAG)
-            dpg.add_spacer(width=20)
-            dpg.add_button(
-                label="Browse",
-                callback=lambda: dpg.show_item("target_filter_dialog"),
-            )
-        dpg.add_spacer(height=15)
-
-        dpg.add_button(
-            label="Run filtering",
-            width=150,
-            callback=_run_filtering,
-        )
-        # --- START ---
-        dpg.add_button(
-            label="Start",
-            width=120,
-            callback=_start_interactive,
-        )
-
-        dpg.add_spacer(height=10)
-
-        # --- INTERACTIVE BUTTONS ---
-        with dpg.group(
-            horizontal=True,
-            show=False,
-            tag="interactive_group",
+        with dpg.child_window(
+            tag="header",
+            border=True,
+            autosize_x=True,
+            height=HEADER_HEIGHT,
+            no_scrollbar=True,
         ):
+            with dpg.group(horizontal=True):
+                dpg.add_text("Status:", color=(180, 180, 180))
+                dpg.add_text("", tag=STATUS_TAG)
+
+        with dpg.child_window(
+            tag="content_area",
+            border=False,
+            autosize_x=True,
+            autosize_y=False,
+            height=-HEADER_HEIGHT - FOOTER_HEIGHT,
+        ):
+            with dpg.collapsing_header(label="Files", default_open=True):
+                with dpg.table(
+                    header_row=False,
+                    resizable=False,
+                    policy=dpg.mvTable_SizingFixedFit,
+                    borders_innerV=True,
+                ):
+                    dpg.add_table_column(
+                        width_fixed=True, init_width_or_weight=220
+                    )
+                    dpg.add_table_column(width_stretch=True)
+                    dpg.add_table_column(
+                        width_fixed=True, init_width_or_weight=90
+                    )
+
+                    with dpg.table_row():
+                        dpg.add_text("Semordnilaps file:")
+                        dpg.add_input_text(
+                            default_value="No file selected",
+                            tag=SEMORDNILAPS_TAG,
+                            readonly=True,
+                            width=-1,
+                        )
+                        dpg.add_button(
+                            label="Browse",
+                            width=80,
+                            callback=lambda: _open_file_dialog(
+                                "semordnilaps_dialog"
+                            ),
+                        )
+
+                    with dpg.table_row():
+                        dpg.add_text("Source words filter:")
+                        dpg.add_input_text(
+                            default_value="No file selected",
+                            tag=SOURCE_WORDS_FILTER_TAG,
+                            readonly=True,
+                            width=-1,
+                        )
+                        dpg.add_button(
+                            label="Browse",
+                            width=80,
+                            callback=lambda: dpg.show_item(
+                                "source_filter_dialog"
+                            ),
+                        )
+
+                    with dpg.table_row():
+                        dpg.add_text("Target words filter:")
+                        dpg.add_input_text(
+                            default_value="No file selected",
+                            tag=TARGET_WORDS_FILTER_TAG,
+                            readonly=True,
+                            width=-1,
+                        )
+                        dpg.add_button(
+                            label="Browse",
+                            width=80,
+                            callback=lambda: dpg.show_item(
+                                "target_filter_dialog"
+                            ),
+                        )
+            dpg.add_spacer(height=15)
+
+            with dpg.group(
+                horizontal=True,
+                show=True,
+            ):
+                dpg.add_button(
+                    label="Filter",
+                    width=100,
+                    callback=_run_filtering,
+                )
+                # --- START ---
+                dpg.add_button(
+                    label="Start",
+                    width=100,
+                    callback=_start_interactive,
+                )
+
+            dpg.add_spacer(height=10)
+
+            # --- INTERACTIVE BUTTONS ---
+            with dpg.group(
+                horizontal=True,
+                show=False,
+                tag="interactive_group",
+            ):
+                dpg.add_button(
+                    label="SOURCE",
+                    tag="source_word_button",
+                    width=300,
+                    callback=_filter_source_word,
+                )
+
+                dpg.add_button(
+                    label="TARGET",
+                    tag="target_word_button",
+                    width=300,
+                    callback=_filter_target_word,
+                )
+
+            dpg.add_spacer(height=5)
+
             dpg.add_button(
-                label="SOURCE",
-                tag="source_word_button",
+                label="Skip / Continue",
+                tag="continue_word_button",
                 width=300,
-                callback=_filter_source_word,
+                callback=_continue_pair,
             )
+        with dpg.child_window(
+            tag="footer",
+            border=False,
+            autosize_x=True,
+            height=FOOTER_HEIGHT,
+            no_scrollbar=True,
+        ):
+            with dpg.table(
+                header_row=False,
+                borders_innerV=False,
+                resizable=False,
+                width=-1,
+                policy=dpg.mvTable_SizingStretchProp,
+            ):
+                dpg.add_table_column(init_width_or_weight=1)
+                dpg.add_table_column(
+                    init_width_or_weight=0.3
+                )  # Don't know why this works
+                dpg.add_table_column(init_width_or_weight=1)
 
-            dpg.add_button(
-                label="TARGET",
-                tag="target_word_button",
-                width=600,
-                callback=_filter_target_word,
-            )
-
-        dpg.add_spacer(height=5)
-
-        dpg.add_button(
-            label="continue",
-            tag="continue_word_button",
-            width=600,
-            callback=_continue_pair,
-        )
-
+                with dpg.table_row():
+                    dpg.add_text(" ")
+                    dpg.add_text("Made with love ❤️", color=(180, 180, 180))
+                    dpg.add_text(" ")
+    dpg.set_primary_window("main_window", True)
     with dpg.window(
         label="Confirm file creation",
         modal=True,
