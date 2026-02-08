@@ -69,7 +69,7 @@ def decompositions_candidates(
 
 
 def find_semordnilaps(
-    src_ngrams: set[str], dst_ngrams: set[str], threshold: float = 3.0
+    src_ngrams: set[str], dst_ngrams: set[str], ngrams_count: int
 ) -> dict[str, dict[int, set[list[str]]]]:
     # Stores normalized versions for each ngram
     src_norm_cache = {}
@@ -98,7 +98,7 @@ def find_semordnilaps(
         reversed_ngram = src_norm_ngram[::-1]
 
         solutions = decompositions_candidates(
-            reversed_ngram, dst_norm_ngrams, 1
+            reversed_ngram, dst_norm_ngrams, ngrams_count
         )
 
         for sol in solutions:
@@ -142,12 +142,12 @@ def build_argparser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-o", "--out", help="Output filepath", required=True)
     parser.add_argument(
-        "-th",
-        "--threshold",
-        help="N-gram freq threshold (default th = 0.3)",
+        "-n",
+        "--ngrams",
+        help="Number of ngrams",
         required=False,
-        default=0.3,
-        type=float,
+        default=1,
+        type=int,
     )
     return parser
 
@@ -157,7 +157,7 @@ class SearchOptions:
     source_lexicon_filepath: str
     target_lexicon_filepath: str
     out_filepath: str
-    freq_treshold: float = field(default=0.3)
+    ngrams_count: str
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -170,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.target_lexicon
         else args.source_lexicon,
         out_filepath=args.out,
-        freq_treshold=args.threshold,
+        ngrams_count=args.ngrams,
     )
     logger.info("Using: %s", opts)
 
@@ -185,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
 
     logger.info("Looking for semordnilaps...")
     semordnilaps = find_semordnilaps(
-        source_lexicon, target_lexicon, threshold=opts.freq_treshold
+        source_lexicon, target_lexicon, opts.ngrams_count
     )
 
     logger.info("Sorting semordnilaps...")
