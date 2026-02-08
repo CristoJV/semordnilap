@@ -177,7 +177,6 @@ def _filter_source_word(word: str):
 
 
 def _filter_target_word(word: str):
-    print(word)
     if AppState.target_words_filter_path is None:
         _set_status("Target words filter file not set", ok=False)
         return
@@ -200,8 +199,6 @@ def _draw_ngram_buttons(parent: str, ngram: Ngram, on_click: callable):
     ngram_phrase = ngram.get_ngram()
     tokens = ngram.get_tokens()
     n = max(len(tokens), 1)
-
-    print(tokens)
 
     def _callback(sender, app_data, user_data):
         on_click(user_data)
