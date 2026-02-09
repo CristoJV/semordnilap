@@ -155,14 +155,14 @@ def _on_filter():
     total = len(AppState.base_pairs)
 
     if _check_words_filter_selected("source"):
-        _apply_incremental_filter(
+        _apply_incremental_filter_inplace(
             AppState.source_words_filter,
             axis="source",
             on_progress=_on_filtering_progress,
         )
 
     if _check_words_filter_selected("target"):
-        _apply_incremental_filter(
+        _apply_incremental_filter_inplace(
             AppState.target_words_filter,
             axis="target",
             on_progress=_on_filtering_progress,
@@ -329,7 +329,7 @@ def _restore_cursor_after_filter(prev_base_idx: int | None):
     AppState.current_pair_index = len(active) - 1
 
 
-def _apply_incremental_filter(
+def _apply_incremental_filter_inplace(
     filters: set[str], *, axis: str, on_progress: Callable | None = None
 ):
     if not _check_pairs_loaded():
@@ -422,7 +422,7 @@ def _filter_pairs_interactive(word: str, axis: str):
     total = len(AppState.base_pairs_active_indices)
 
     prev_base_idx = _get_current_base_index()
-    _apply_incremental_filter(
+    _apply_incremental_filter_inplace(
         {word}, axis=axis, on_progress=_on_filtering_progress
     )
     _refresh_pairs_view()

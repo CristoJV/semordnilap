@@ -20,7 +20,8 @@ def get_candidate_indices(
 ) -> set[int]:
     candidates = set()
     for f in filters:
-        candidates |= index.get(f, set())
+        for token in f.split():
+            candidates |= index.get(token, set())
     return candidates
 
 
@@ -33,16 +34,3 @@ def should_filter_ngram_fast(ngram: str, filters: set[str]) -> bool:
             if " ".join(tokens[i : i + size]) in filters:
                 return True
     return False
-
-
-def filter_pairs_incremental(
-    pairs: list[tuple[str, str]], filters: set[str], index: dict[str, set[int]]
-):
-    total = len(pairs)
-    candidates = get_candidate_indices(index, filters)
-
-    for i, (source, target) in enumerate(pairs, start=1):
-        if (i - 1) not in candidates:
-            yield i, total, (source, target)
-        else:
-            yield i, total, None
