@@ -4,7 +4,9 @@ from pathlib import Path
 import dearpygui.dearpygui as dpg
 
 from semordnilap.app.logic.filtering import (
-    filter_pairs_incremental,
+    build_inverse_index,
+    get_candidate_indices,
+    should_filter_ngram_fast,
 )
 from semordnilap.app.logic.iteration import (
     build_source_target_pairs,
@@ -43,11 +45,13 @@ def _semordnilaps_selected(_, app_data):
         AppState.semordnilaps = json_data
         dpg.set_value(SEMORDNILAPS_TAG, path)
 
-        _load_pairs()
+        # TODO: ADD load button
     except FileNotFoundError as e:
         AppState.semordnilaps = None
         dpg.set_value(SEMORDNILAPS_TAG, "No file selected")
         _set_status(f"Invalid file: {e}", ok=False)
+
+    _load_pairs()
 
 
 def _source_words_filter_selected(_, app_data):
@@ -123,12 +127,25 @@ def _create_output_file():
 
 
 def _load_pairs():
+
     if AppState.semordnilaps is None:
         _set_status("Semordnilaps not loaded", ok=False)
         return
-    if AppState.pairs is None:
-        AppState.pairs = build_source_target_pairs(AppState.semordnilaps)
-        _set_status(f"Loaded pairs ({len(AppState.pairs)} entries)", ok=True)
+
+    if not AppState.base_pairs:
+        AppState.base_pairs = build_source_target_pairs(AppState.semordnilaps)
+        AppState.base_pairs_active_indices = set(
+            range(len(AppState.base_pairs))
+        )
+        AppState.source_reverse_index = build_inverse_index(
+            AppState.base_pairs, axis="source"
+        )
+        AppState.target_reverse_index = build_inverse_index(
+            AppState.base_pairs, axis="target"
+        )
+        _set_status(
+            f"Loaded pairs ({len(AppState.base_pairs)} entries)", ok=True
+        )
 
 
 def _start_interactive():
@@ -140,20 +157,20 @@ def _start_interactive():
 
 def _advance_pair():
 
-    if not AppState.pairs:
+    if not AppState.pairs_view:
         _set_status("Interactive filtering finished ✅", ok=True)
         dpg.hide_item("interactive_group")
         return
 
-    current_pair = AppState.pairs[0]
+    current_pair = AppState.pairs_view[0]
     AppState.current_source_ngram.set(current_pair[0])
     AppState.current_target_ngram.set(current_pair[1])
     _update_interactive_buttons()
 
 
 def _continue_pair():
-    if AppState.pairs:
-        AppState.pairs.pop(0)
+    if AppState.pairs_view:
+        AppState.pairs_view.pop(0)
         _advance_pair()
     else:
         _set_status("Interactive filtering finished ✅", ok=True)
@@ -173,25 +190,52 @@ def _on_filtering_ended(src_total: int, dst_total: int):
 
 
 def _apply_incremental_filter(
-    words: set[str], axis, on_progress: Callable = None
+    filters: set[str], *, axis: str, on_progress: Callable | None = None
 ):
-    new_pairs = []
-    for i, total, pair in filter_pairs_incremental(
-        AppState.pairs, words, axis=axis
-    ):
-        if pair:
-            new_pairs.append(pair)
+    index = (
+        AppState.source_reverse_index
+        if axis == "source"
+        else AppState.target_reverse_index
+    )
+
+    # Get candidates using reverse index
+    candidates = get_candidate_indices(index, filters)
+
+    # Filterout already processed indices
+    to_check = AppState.base_pairs_active_indices & candidates
+
+    removed: set[int] = set()
+
+    total = len(to_check)
+    for i, idx in enumerate(to_check, start=1):
+        source, target = AppState.base_pairs[idx]
+        text = source if axis == "source" else target
+
+        if should_filter_ngram_fast(text, filters):
+            removed.add(idx)
 
         if on_progress and i % 20 == 0:
             on_progress(i, total)
-    return new_pairs
+
+    # Update indexes
+    AppState.base_pairs_active_indices -= removed
+
+
+def _refresh_pairs_view():
+    if not AppState.base_pairs or not AppState.base_pairs_active_indices:
+        _set_status("Pairs not loaded", ok=False)
+        return
+    AppState.pairs_view = [
+        AppState.base_pairs[i]
+        for i in sorted(AppState.base_pairs_active_indices)
+    ]
 
 
 def _run_filtering():
     _ui_block()
     _load_pairs()
 
-    if not AppState.pairs:
+    if not AppState.base_pairs:
         _set_status("No pairs loaded", ok=False)
         return
 
@@ -201,24 +245,30 @@ def _run_filtering():
     ):
         _set_status("No Source o Target words filter loaded.", ok=False)
 
-    total = len(AppState.pairs)
+    total = len(AppState.base_pairs)
 
-    if AppState.source_words_filter is not None:
-        AppState.pairs = _apply_incremental_filter(
-            AppState.source_words_filter, "source", _on_filtering_progress
+    if AppState.source_words_filter:
+        _apply_incremental_filter(
+            AppState.source_words_filter,
+            axis="source",
+            on_progress=_on_filtering_progress,
         )
 
-    if AppState.target_words_filter is not None:
-        AppState.pairs = _apply_incremental_filter(
-            AppState.target_words_filter, "target", _on_filtering_progress
+    if AppState.target_words_filter:
+        _apply_incremental_filter(
+            AppState.target_words_filter,
+            axis="target",
+            on_progress=_on_filtering_progress,
         )
+
+    _refresh_pairs_view()
 
     _ui_unblock()
-    _on_filtering_ended(total, len(AppState.pairs))
+    _on_filtering_ended(total, len(AppState.pairs_view))
 
 
 def _filter_pairs_interactive(word: str, axis: str):
-    _ui_block()
+
     if axis == "source":
         if (
             AppState.source_words_filter is None
@@ -239,23 +289,29 @@ def _filter_pairs_interactive(word: str, axis: str):
         filter_path = AppState.target_words_filter_path
         filter_set = AppState.target_words_filter
 
+    _ui_block()
+    # Persist word
+
     append_word_if_missing(
         filepath=filter_path,
         word=word,
         current_words=filter_set,
     )
+
     _set_status(
         f'Added "{word}" to target filter',
         ok=True,
     )
 
-    total = len(AppState.pairs)
-    AppState.pairs = _apply_incremental_filter(
-        {word}, axis, _on_filtering_progress
+    total = len(AppState.base_pairs_active_indices)
+
+    _apply_incremental_filter(
+        {word}, axis=axis, on_progress=_on_filtering_progress
     )
+    _refresh_pairs_view()
 
     _ui_unblock()
-    _on_filtering_ended(total, len(AppState.pairs))
+    _on_filtering_ended(total, len(AppState.pairs_view))
 
     _advance_pair()
 
@@ -276,7 +332,7 @@ def _draw_ngram_buttons(parent: str, ngram: Ngram, on_click: callable):
     n = max(len(tokens), 1)
 
     def _callback(sender, app_data, user_data):
-        on_click(set(user_data))
+        on_click(user_data)
 
     dpg.add_button(
         parent=parent,
@@ -357,10 +413,10 @@ def _open_file_dialog(tag):
 
 
 def _export_pairs_to_file(path: str):
-    if not AppState.pairs:
+    if not AppState.pairs_view:
         _set_status("No pairs to export", ok=False)
         return
-    pairs = sorted(AppState.pairs, key=lambda x: (x[0], x[1]))
+    pairs = sorted(AppState.pairs_view, key=lambda x: (x[0], x[1]))
 
     try:
         with open(path, "w", encoding="utf-8") as f:

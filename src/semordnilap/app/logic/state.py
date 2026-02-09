@@ -43,13 +43,18 @@ class Ngram:
 
 class AppState:
     semordnilaps: dict[str, dict[int, set[str]]] = None
-    source_words_filter: set[str] | None = None
     source_words_filter_path: Path | None = None
-    target_words_filter: set[str] | None = None
     target_words_filter_path: Path | None = None
 
-    pairs: list[tuple[str, str]] | None = None
-    pairs_idx: int | None = None
+    source_words_filter: set[str] | None = None
+    target_words_filter: set[str] | None = None
+
+    base_pairs: list[tuple[str, str]] | None = None
+    base_pairs_active_indices: set[int] = set()
+    pairs_view: list[tuple[str, str]] = []
+
+    source_reverse_index: dict[str, set[int]] = {}
+    target_reverse_index: dict[str, set[int]] = {}
 
     current_source_ngram: Ngram = Ngram()
     current_target_ngram: Ngram = Ngram()
