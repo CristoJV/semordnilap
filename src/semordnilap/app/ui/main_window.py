@@ -1,13 +1,10 @@
-from functools import partial
+from collections.abc import Callable
 from pathlib import Path
 
 import dearpygui.dearpygui as dpg
 
 from semordnilap.app.logic.filtering import (
-    filter_pairs_sources,
-    filter_pairs_targets,
-    filter_semordnilaps_sources,
-    filter_semordnilaps_targets,
+    filter_pairs_incremental,
 )
 from semordnilap.app.logic.iteration import (
     build_source_target_pairs,
@@ -24,6 +21,9 @@ STATUS_TAG = "status"
 HEADER_HEIGHT = 30
 FOOTER_HEIGHT = 30
 
+LOADING_W = 320
+LOADING_H = 160
+
 
 def _set_status(text, ok=True):
     dpg.set_value(STATUS_TAG, text)
@@ -38,14 +38,12 @@ def _semordnilaps_selected(_, app_data):
     try:
         json_data = load_semordnilaps(path)
 
-        # Validate
+        # TODO: Validate
+
         AppState.semordnilaps = json_data
         dpg.set_value(SEMORDNILAPS_TAG, path)
-        _set_status(
-            f"Semordnilaps JSON loaded successfully ({len(json_data)} entries)",
-            ok=True,
-        )
 
+        _load_pairs()
     except FileNotFoundError as e:
         AppState.semordnilaps = None
         dpg.set_value(SEMORDNILAPS_TAG, "No file selected")
@@ -124,15 +122,17 @@ def _create_output_file():
         dpg.set_value("_pending_filter_kind", "")
 
 
-def _start_interactive():
+def _load_pairs():
     if AppState.semordnilaps is None:
         _set_status("Semordnilaps not loaded", ok=False)
         return
-
     if AppState.pairs is None:
         AppState.pairs = build_source_target_pairs(AppState.semordnilaps)
         _set_status(f"Loaded pairs ({len(AppState.pairs)} entries)", ok=True)
 
+
+def _start_interactive():
+    _load_pairs()
     dpg.show_item("interactive_group")
     dpg.show_item("continue_word_button")
     _advance_pair()
@@ -159,38 +159,113 @@ def _continue_pair():
         _set_status("Interactive filtering finished ✅", ok=True)
 
 
-def _filter_source_word(word: str):
-    if AppState.source_words_filter_path is None:
-        _set_status("Source words filter file not set", ok=False)
-        return
+def _on_filtering_progress(i: int, total: int):
+    percent = int(i / total * 100)
+    _set_status(f'Filtering words"… {percent}% ({i}/{total})', ok=True)
+    dpg.split_frame()
 
-    append_word_if_missing(
-        filepath=AppState.source_words_filter_path,
-        word=word,
-        current_words=AppState.source_words_filter,
+
+def _on_filtering_ended(src_total: int, dst_total: int):
+    _set_status(
+        f"(Filtered: {src_total - dst_total} entries)",
+        ok=True,
     )
 
-    AppState.pairs = filter_pairs_sources(AppState.pairs, {word})
 
-    _set_status(f'Added "{word}" to source filter', ok=True)
+def _apply_incremental_filter(
+    words: set[str], axis, on_progress: Callable = None
+):
+    new_pairs = []
+    for i, total, pair in filter_pairs_incremental(
+        AppState.pairs, words, axis=axis
+    ):
+        if pair:
+            new_pairs.append(pair)
+
+        if on_progress and i % 20 == 0:
+            on_progress(i, total)
+    return new_pairs
+
+
+def _run_filtering():
+    _ui_block()
+    _load_pairs()
+
+    if not AppState.pairs:
+        _set_status("No pairs loaded", ok=False)
+        return
+
+    if (
+        AppState.source_words_filter is None
+        and AppState.target_words_filter is None
+    ):
+        _set_status("No Source o Target words filter loaded.", ok=False)
+
+    total = len(AppState.pairs)
+
+    if AppState.source_words_filter is not None:
+        AppState.pairs = _apply_incremental_filter(
+            AppState.source_words_filter, "source", _on_filtering_progress
+        )
+
+    if AppState.target_words_filter is not None:
+        AppState.pairs = _apply_incremental_filter(
+            AppState.target_words_filter, "target", _on_filtering_progress
+        )
+
+    _ui_unblock()
+    _on_filtering_ended(total, len(AppState.pairs))
+
+
+def _filter_pairs_interactive(word: str, axis: str):
+    _ui_block()
+    if axis == "source":
+        if (
+            AppState.source_words_filter is None
+            or AppState.source_words_filter_path is None
+        ):
+            _set_status("Source words filter file not loaded", ok=False)
+            return
+        filter_path = AppState.source_words_filter_path
+        filter_set = AppState.source_words_filter
+
+    else:
+        if (
+            AppState.target_words_filter is None
+            or AppState.target_words_filter_path is None
+        ):
+            _set_status("Target words filter file not loaded", ok=False)
+            return
+        filter_path = AppState.target_words_filter_path
+        filter_set = AppState.target_words_filter
+
+    append_word_if_missing(
+        filepath=filter_path,
+        word=word,
+        current_words=filter_set,
+    )
+    _set_status(
+        f'Added "{word}" to target filter',
+        ok=True,
+    )
+
+    total = len(AppState.pairs)
+    AppState.pairs = _apply_incremental_filter(
+        {word}, axis, _on_filtering_progress
+    )
+
+    _ui_unblock()
+    _on_filtering_ended(total, len(AppState.pairs))
+
     _advance_pair()
 
 
-def _filter_target_word(word: str):
-    if AppState.target_words_filter_path is None:
-        _set_status("Target words filter file not set", ok=False)
-        return
+def _filter_source_pairs_interactive(word: str):
+    _filter_pairs_interactive(word, axis="source")
 
-    append_word_if_missing(
-        filepath=AppState.target_words_filter_path,
-        word=word,
-        current_words=AppState.target_words_filter,
-    )
 
-    AppState.pairs = filter_pairs_targets(AppState.pairs, {word})
-
-    _set_status(f'Added "{word}" to target filter', ok=True)
-    _advance_pair()
+def _filter_target_pairs_interactive(word: str):
+    _filter_pairs_interactive(word, axis="target")
 
 
 def _draw_ngram_buttons(parent: str, ngram: Ngram, on_click: callable):
@@ -201,7 +276,7 @@ def _draw_ngram_buttons(parent: str, ngram: Ngram, on_click: callable):
     n = max(len(tokens), 1)
 
     def _callback(sender, app_data, user_data):
-        on_click(user_data)
+        on_click(set(user_data))
 
     dpg.add_button(
         parent=parent,
@@ -262,55 +337,19 @@ def _draw_source_target_table():
                 _draw_ngram_buttons(
                     parent=dpg.last_item(),
                     ngram=AppState.current_source_ngram,
-                    on_click=_filter_source_word,
+                    on_click=_filter_source_pairs_interactive,
                 )
 
             with dpg.group():
                 _draw_ngram_buttons(
                     parent=dpg.last_item(),
                     ngram=AppState.current_target_ngram,
-                    on_click=_filter_target_word,
+                    on_click=_filter_target_pairs_interactive,
                 )
 
 
 def _update_interactive_buttons():
     _draw_source_target_table()
-
-
-def _run_filtering():
-    if AppState.semordnilaps is None:
-        _set_status("Semordnilaps not loaded", ok=False)
-        return
-
-    if AppState.source_words_filter is None:
-        _set_status("Words filter not loaded", ok=False)
-        return
-
-    if AppState.target_words_filter is None:
-        _set_status("Words filter not loaded", ok=False)
-        return
-
-    count_entries = len(AppState.semordnilaps)
-    filtered = filter_semordnilaps_sources(
-        AppState.semordnilaps, AppState.source_words_filter
-    )
-    AppState.semordnilaps = filtered
-
-    _set_status(
-        f"Filtering sources completed ({len(filtered)} entries)",
-        ok=True,
-    )
-
-    filtered = filter_semordnilaps_targets(
-        AppState.semordnilaps, AppState.target_words_filter
-    )
-    AppState.semordnilaps = filtered
-    _set_status(
-        f"Filtering targets completed ({len(filtered)} entries - {count_entries - len(filtered)} removed)",
-        ok=True,
-    )
-
-    AppState.pairs = build_source_target_pairs(AppState.semordnilaps)
 
 
 def _open_file_dialog(tag):
@@ -340,6 +379,83 @@ def _export_dialog_selected(_, app_data):
         _set_status("Export cancelled", ok=False)
     path = str(Path(directory) / filename)
     _export_pairs_to_file(path)
+
+
+def _ui_block():
+    _center_window("loading_overlay", LOADING_W, LOADING_H)
+    dpg.show_item("loading_overlay")
+    dpg.disable_item("interactive_group")
+    dpg.disable_item("continue_word_button")
+
+    dpg.split_frame()
+
+
+def _ui_unblock():
+    dpg.hide_item("loading_overlay")
+    dpg.enable_item("interactive_group")
+    dpg.enable_item("continue_word_button")
+
+
+def _center_window(tag: str, width: int, height: int):
+    vw = dpg.get_viewport_width()
+    vh = dpg.get_viewport_height()
+    dpg.set_item_pos(
+        tag,
+        [(vw - width) // 2, (vh - height) // 2],
+    )
+
+
+def _build_loading_window():
+    with dpg.window(
+        tag="loading_overlay",
+        modal=True,
+        show=False,
+        no_title_bar=True,
+        no_move=True,
+        no_resize=True,
+        no_close=True,
+        no_scrollbar=True,
+        width=LOADING_W,
+        height=LOADING_H,
+    ):
+        with dpg.table(
+            header_row=False,
+            resizable=False,
+            policy=dpg.mvTable_SizingStretchProp,
+            width=-1,
+        ):
+            dpg.add_table_column(init_width_or_weight=1)
+            dpg.add_table_column(init_width_or_weight=0)
+            dpg.add_table_column(init_width_or_weight=1)
+
+            with dpg.table_row():
+                dpg.add_text("")
+                dpg.add_text("Filtering… please wait")
+                dpg.add_text("")
+
+            with dpg.table_row():
+                dpg.add_text("")
+                dpg.add_spacer(height=15)
+                dpg.add_text("")
+
+            with dpg.table_row():
+                dpg.add_text("")
+                dpg.add_loading_indicator()
+                dpg.add_text("")
+
+            with dpg.table_row():
+                dpg.add_text("")
+                dpg.add_spacer(height=20)
+                dpg.add_text("")
+
+            with dpg.table_row():
+                dpg.add_text("")
+                dpg.add_button(
+                    label="Cancel",
+                    width=100,
+                    callback=lambda: None,
+                )
+                dpg.add_text("")
 
 
 def build_ui():
@@ -387,6 +503,8 @@ def build_ui():
         height=400,
     ):
         dpg.add_file_extension(".txt")
+
+    _build_loading_window()
 
     with dpg.window(
         tag="main_window",
