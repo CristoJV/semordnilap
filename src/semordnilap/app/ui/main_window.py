@@ -144,15 +144,16 @@ def _on_filter():
         _set_status(PAIRS_ARE_NOT_LOADED_MSG, ok=False)
         return
 
-    if not _check_words_filter_selected(
-        "source"
-    ) and not _check_words_filter_selected("target"):
-        _set_status("No Source o Target words filter loaded.", ok=False)
-        return
-
     _ui_block()
 
     total = len(AppState.base_pairs)
+
+    AppState.base_pairs_active_indices = set(range(len(AppState.base_pairs)))
+
+    if AppState.source_ngram_size_filter > 0:
+        _filter_ngram_size(AppState.source_ngram_size_filter, axis="source")
+    if AppState.target_ngram_size_filter > 0:
+        _filter_ngram_size(AppState.target_ngram_size_filter, axis="target")
 
     if _check_words_filter_selected("source"):
         _apply_incremental_filter_inplace(
@@ -190,20 +191,34 @@ def _on_start_interactive():
     _advance_pair()
 
 
-def _on_ngram_size_selected(sender, app_data):
+def _on_source_ngram_size_selected(sender, app_data):
     if not _check_pairs_loaded:
         _set_status(PAIRS_ARE_NOT_LOADED_MSG, ok=False)
         return
     if app_data == "All":
-        AppState.ngram_size_filter = None
-
+        AppState.source_ngram_size_filter = 0
     else:
-        AppState.ngram_size_filter = int(app_data)
-        _filter_ngram_size(AppState.ngram_size_filter)
+        AppState.source_ngram_size_filter = int(app_data)
 
-    _refresh_pairs_view()
-    AppState.current_pair_index = 0
-    _advance_pair()
+    _set_status(
+        f"Selected N-gram filter {AppState.source_ngram_size_filter}. Please filter your entries to apply this filter.",
+        ok=True,
+    )
+
+
+def _on_target_ngram_size_selected(sender, app_data):
+    if not _check_pairs_loaded:
+        _set_status(PAIRS_ARE_NOT_LOADED_MSG, ok=False)
+        return
+    if app_data == "All":
+        AppState.target_ngram_size_filter = 0
+    else:
+        AppState.target_ngram_size_filter = int(app_data)
+
+    _set_status(
+        f"Selected N-gram filter {AppState.target_ngram_size_filter}. Please filter your entries to apply this filter.",
+        ok=True,
+    )
 
 
 def _on_load_pairs():
@@ -442,14 +457,15 @@ def _filter_target_pairs_interactive(word: str):
     _filter_pairs_interactive(word, axis="target")
 
 
-def _filter_ngram_size(n: int):
+def _filter_ngram_size(n: int, axis: str):
     if not _check_pairs_loaded():
         return
     removed = set()
 
     for idx in AppState.base_pairs_active_indices:
         source, target = AppState.base_pairs[idx]
-        if len(target.split()) != n:
+        text = source if axis == "source" else target
+        if len(text.split()) != n:
             removed.add(idx)
     AppState.base_pairs_active_indices -= removed
 
@@ -461,8 +477,9 @@ def _on_filtering_progress(i: int, total: int):
 
 
 def _on_filtering_ended(src_total: int, dst_total: int):
+    percentaje = (src_total - dst_total) / src_total * 100
     _set_status(
-        f"(Filtered: {src_total - dst_total} entries)",
+        f"Filtered: {src_total - dst_total}/{src_total} ({percentaje:.0f}%) entries - Keeped: {dst_total} entries",
         ok=True,
     )
 
@@ -805,12 +822,21 @@ def _build_file_explorer():
                     callback=lambda: dpg.show_item("target_filter_dialog"),
                 )
             with dpg.table_row():
-                dpg.add_text("N-gram size:")
+                dpg.add_text("Source N-gram size:")
                 dpg.add_combo(
                     items=["All", "1", "2", "3"],
                     default_value="All",
                     width=-1,
-                    callback=_on_ngram_size_selected,
+                    callback=_on_source_ngram_size_selected,
+                )
+                dpg.add_text("")
+            with dpg.table_row():
+                dpg.add_text("Target N-gram size:")
+                dpg.add_combo(
+                    items=["All", "1", "2", "3"],
+                    default_value="All",
+                    width=-1,
+                    callback=_on_target_ngram_size_selected,
                 )
                 dpg.add_text("")
 

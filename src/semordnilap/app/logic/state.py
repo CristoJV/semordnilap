@@ -48,7 +48,8 @@ class AppState:
 
     source_words_filter: set[str] | None = None
     target_words_filter: set[str] | None = None
-    ngram_size_filter: int | None = None
+    source_ngram_size_filter: int = 0
+    target_ngram_size_filter: int = 0
 
     base_pairs: list[tuple[str, str]] | None = None
     base_pairs_active_indices: set[int] | None = None
