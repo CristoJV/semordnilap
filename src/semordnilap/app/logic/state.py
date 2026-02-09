@@ -58,3 +58,4 @@ class AppState:
 
     current_source_ngram: Ngram = Ngram()
     current_target_ngram: Ngram = Ngram()
+    current_pair_index: int = 0
