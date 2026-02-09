@@ -213,6 +213,34 @@ def _on_filtering_ended(src_total: int, dst_total: int):
     )
 
 
+def _get_current_base_index():
+    if not AppState.pairs_view:
+        return
+
+    current_pair = AppState.pairs_view[AppState.current_pair_index]
+    return AppState.base_pairs.index(current_pair)
+
+
+def _restore_cursor_after_filter(prev_base_idx: int | None):
+    active = sorted(AppState.base_pairs_active_indices)
+    if not active:
+        AppState.current_pair_index = 0
+        return
+
+    # If the index continues active
+    if prev_base_idx in AppState.base_pairs_active_indices:
+        AppState.current_pair_index = active.inde(prev_base_idx)
+
+    # If the index stops being active, get the next active pair
+    for idx in active:
+        if idx > prev_base_idx:
+            AppState.current_pair_index = active.index(idx)
+            return
+
+    # If there is no next, stay at the end
+    AppState.current_pair_index = len(active) - 1
+
+
 def _apply_incremental_filter(
     filters: set[str], *, axis: str, on_progress: Callable | None = None
 ):
@@ -248,14 +276,17 @@ def _apply_incremental_filter(
 def _refresh_pairs_view():
     if not AppState.base_pairs or not AppState.base_pairs_active_indices:
         _set_status("Pairs not loaded", ok=False)
+        AppState.current_pair_index = 0
         return
+
     AppState.pairs_view = [
         AppState.base_pairs[i]
         for i in sorted(AppState.base_pairs_active_indices)
     ]
 
-    AppState.current_pair_index = min(
-        AppState.current_pair_index, max(len(AppState.pairs_view) - 1, 0)
+    _set_status(
+        f"Pairs refreshed ({len(AppState.base_pairs_active_indices)} entries)",
+        ok=True,
     )
 
 
@@ -291,6 +322,9 @@ def _run_filtering():
 
     _refresh_pairs_view()
 
+    # When filtering the index is set to 0
+    AppState.current_pair_index = 0
+
     _ui_unblock()
     _on_filtering_ended(total, len(AppState.pairs_view))
 
@@ -318,7 +352,6 @@ def _filter_pairs_interactive(word: str, axis: str):
         filter_set = AppState.target_words_filter
 
     _ui_block()
-    # Persist word
 
     append_word_if_missing(
         filepath=filter_path,
@@ -333,10 +366,12 @@ def _filter_pairs_interactive(word: str, axis: str):
 
     total = len(AppState.base_pairs_active_indices)
 
+    prev_base_idx = _get_current_base_index()
     _apply_incremental_filter(
         {word}, axis=axis, on_progress=_on_filtering_progress
     )
     _refresh_pairs_view()
+    _restore_cursor_after_filter(prev_base_idx)
 
     _ui_unblock()
     _on_filtering_ended(total, len(AppState.pairs_view))
