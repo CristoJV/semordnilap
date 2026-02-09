@@ -35,10 +35,16 @@ CONFIRM_CREATE_MODAL_TAG = "confirm_create_modal"
 HEADER_TAG = "header"
 FOOTER_TAG = "footer"
 
+SOURCE_FILTER_VIEW_TAG = "source_filter_view"
+TARGET_FILTER_VIEW_TAG = "target_filter_view"
+FILTERS_PANEL_TAG = "filters_panel"
+
 PAIRS_ARE_NOT_LOADED_MSG = "Pairs are not loaded"
 
 HEADER_HEIGHT = 30
 FOOTER_HEIGHT = 30
+FILTERS_PANEL_HEIGHT = 160
+CONTAINER_HEIGHT_DIFF = -HEADER_HEIGHT - FOOTER_HEIGHT - FILTERS_PANEL_HEIGHT
 
 LOADING_W = 320
 LOADING_H = 160
@@ -133,8 +139,8 @@ def _on_words_filter_selected(app_data, kind):
             dpg.set_value("_pending_filter_kind", kind)
             dpg.show_item(CONFIRM_CREATE_MODAL_TAG)
 
+        _refresh_filters_view()
     except Exception as e:
-        AppState.words_filter = None
         _set_status(f"Error loading words filter: {e}", ok=False)
 
 
@@ -394,6 +400,35 @@ def _refresh_pairs_view():
         f"Pairs refreshed ({len(AppState.base_pairs_active_indices)} entries)",
         ok=True,
     )
+
+
+def _refresh_filters_view():
+    dpg.delete_item(SOURCE_FILTER_VIEW_TAG, children_only=True)
+    dpg.delete_item(TARGET_FILTER_VIEW_TAG, children_only=True)
+
+    if AppState.source_words_filter:
+        dpg.add_text(
+            f"Total: {len(AppState.source_words_filter)}",
+            parent=SOURCE_FILTER_VIEW_TAG,
+        )
+        dpg.add_separator(parent=SOURCE_FILTER_VIEW_TAG)
+        for word in sorted(
+            AppState.source_words_filter,
+            key=lambda s: (len(s.split()), len(s)),
+        ):
+            dpg.add_text(word, parent=SOURCE_FILTER_VIEW_TAG)
+
+    if AppState.target_words_filter:
+        dpg.add_text(
+            f"Total: {len(AppState.target_words_filter)}",
+            parent=TARGET_FILTER_VIEW_TAG,
+        )
+        dpg.add_separator(parent=TARGET_FILTER_VIEW_TAG)
+        for word in sorted(
+            AppState.target_words_filter,
+            key=lambda s: (len(s.split()), len(s)),
+        ):
+            dpg.add_text(word, parent=TARGET_FILTER_VIEW_TAG)
 
 
 # ----------------------------- Filtering ----------------------------
@@ -869,6 +904,41 @@ def _build_registries():
         dpg.add_string_value(tag=PENDING_FILTER_KIND_TAG, default_value="")
 
 
+def _build_filters_panel():
+    with dpg.child_window(
+        tag="filters_panel",
+        border=True,
+        autosize_x=True,
+        height=160,
+    ):
+        with dpg.table(
+            header_row=True,
+            policy=dpg.mvTable_SizingStretchProp,
+            width=-1,
+        ):
+            dpg.add_table_column(label="Source filter")
+            dpg.add_table_column(label="Target filter")
+
+            with dpg.table_row():
+                with dpg.group():
+                    with dpg.child_window(
+                        tag=SOURCE_FILTER_VIEW_TAG,
+                        border=False,
+                        height=-1,
+                        autosize_x=True,
+                    ):
+                        pass
+
+                with dpg.group():
+                    with dpg.child_window(
+                        tag=TARGET_FILTER_VIEW_TAG,
+                        border=False,
+                        height=-1,
+                        autosize_x=True,
+                    ):
+                        pass
+
+
 def _build_main_window():
     with dpg.window(
         tag=MAIN_WINDOW_TAG,
@@ -892,14 +962,15 @@ def _build_main_window():
             tag=CONTENT_AREA_TAG,
             border=False,
             autosize_x=True,
-            autosize_y=False,
-            height=-HEADER_HEIGHT - FOOTER_HEIGHT,
+            height=CONTAINER_HEIGHT_DIFF,
         ):
             _build_file_explorer()
             dpg.add_spacer(height=15)
             _build_action_buttons()
             dpg.add_spacer(height=10)
             _build_interactive_app()
+
+        _build_filters_panel()
 
         with dpg.child_window(
             tag=FOOTER_TAG,
