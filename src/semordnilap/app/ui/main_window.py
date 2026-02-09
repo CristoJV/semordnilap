@@ -43,6 +43,8 @@ PAIRS_ARE_NOT_LOADED_MSG = "Pairs are not loaded"
 
 HEADER_HEIGHT = 30
 FOOTER_HEIGHT = 30
+WORD_HEIGHT = 28
+SPACER_HEIGHT = 5
 FILTERS_PANEL_HEIGHT = 160
 CONTAINER_HEIGHT_DIFF = -HEADER_HEIGHT - FOOTER_HEIGHT - FILTERS_PANEL_HEIGHT
 
@@ -191,8 +193,7 @@ def _on_start_interactive():
     _refresh_pairs_view()
     AppState.current_pair_index = 0
 
-    dpg.show_item("interactive_group")
-    dpg.show_item(SKIP_CONTINUE_BUTTON_TAG)
+    dpg.show_item(INTERACTIVE_GROUP_TAG)
 
     _advance_pair()
 
@@ -298,13 +299,13 @@ def _advance_pair():
 
     if AppState.current_pair_index >= len(AppState.pairs_view):
         _set_status("Interactive filtering finished", ok=True)
-        dpg.hide_item("interactive_group")
+        dpg.hide_item(INTERACTIVE_GROUP_TAG)
         return
 
     current_pair = AppState.pairs_view[AppState.current_pair_index]
     AppState.current_source_ngram.set(current_pair[0])
     AppState.current_target_ngram.set(current_pair[1])
-    _update_interactive_buttons()
+    _refresh_source_target_table()
 
 
 def _continue_pair():
@@ -522,10 +523,6 @@ def _on_filtering_ended(src_total: int, dst_total: int):
 # -------------------------------------------------------------------- #
 
 
-def _update_interactive_buttons():
-    _build_source_target_table()
-
-
 def _open_file_dialog(tag):
     dpg.show_item(tag)
 
@@ -558,16 +555,14 @@ def _export_dialog_selected(_, app_data):
 def _ui_block():
     _center_window("loading_overlay", LOADING_W, LOADING_H)
     dpg.show_item("loading_overlay")
-    dpg.disable_item("interactive_group")
-    dpg.disable_item(SKIP_CONTINUE_BUTTON_TAG)
+    dpg.disable_item(INTERACTIVE_GROUP_TAG)
 
     dpg.split_frame()
 
 
 def _ui_unblock():
     dpg.hide_item("loading_overlay")
-    dpg.enable_item("interactive_group")
-    dpg.enable_item(SKIP_CONTINUE_BUTTON_TAG)
+    dpg.enable_item(INTERACTIVE_GROUP_TAG)
 
 
 def _center_window(tag: str, width: int, height: int):
@@ -579,9 +574,21 @@ def _center_window(tag: str, width: int, height: int):
     )
 
 
-def _build_ngram_buttons(parent: str, ngram: Ngram, on_click: callable):
-    dpg.delete_item(parent, children_only=True)
+def _refresh_source_target_table():
+    _refresh_ngram_buttons(
+        tag_prefix="source_ngram",
+        ngram=AppState.current_source_ngram,
+        on_click=_filter_source_pairs_interactive,
+    )
 
+    _refresh_ngram_buttons(
+        tag_prefix="target_ngram",
+        ngram=AppState.current_target_ngram,
+        on_click=_filter_target_pairs_interactive,
+    )
+
+
+def _refresh_ngram_buttons(tag_prefix: str, ngram: Ngram, on_click: callable):
     ngram_phrase = ngram.get_ngram()
     tokens = ngram.get_tokens()
     n = max(len(tokens), 1)
@@ -589,73 +596,101 @@ def _build_ngram_buttons(parent: str, ngram: Ngram, on_click: callable):
     def _callback(sender, app_data, user_data):
         on_click(user_data)
 
-    dpg.add_button(
-        parent=parent,
+    dpg.configure_item(
+        f"{tag_prefix}_phrase",
         label=ngram_phrase,
-        width=-1,
-        height=32,
         user_data=ngram_phrase,
         callback=_callback,
     )
 
-    if n >= 2:
-        dpg.add_spacer(parent=parent, height=4)
-        with dpg.table(
-            parent=parent,
-            header_row=False,
-            resizable=False,
-            policy=dpg.mvTable_SizingStretchProp,
-            width=-1,
-        ):
-            for _ in tokens:
-                dpg.add_table_column(init_width_or_weight=1)
+    table = f"{tag_prefix}_tokens_table"
 
-            with dpg.table_row():
+    dpg.delete_item(table, children_only=True)
+
+    if n >= 2:
+        cols = max(len(tokens), 1)
+        for _ in range(cols):
+            dpg.add_table_column(parent=table, init_width_or_weight=1)
+
+        with dpg.table_row(parent=table):
+            if tokens:
                 for token in tokens:
                     dpg.add_button(
                         label=token,
                         width=-1,
-                        height=28,
+                        height=WORD_HEIGHT,
                         user_data=token,
                         callback=_callback,
                     )
 
 
-def _build_source_target_table():
-    dpg.delete_item("interactive_table", children_only=True)
+def _build_ngram_buttons(parent: str, tag_prefix: str):
+    with dpg.group(parent=parent, tag=f"{tag_prefix}_root"):
+        dpg.add_button(
+            tag=f"{tag_prefix}_phrase",
+            width=-1,
+            height=WORD_HEIGHT,
+        )
 
+        dpg.add_spacer(height=SPACER_HEIGHT)
+
+        with dpg.table(
+            tag=f"{tag_prefix}_tokens_table",
+            header_row=False,
+            resizable=False,
+            policy=dpg.mvTable_SizingStretchProp,
+            width=-1,
+        ):
+            # Siempre al menos una columna
+            dpg.add_table_column(init_width_or_weight=1)
+
+            with dpg.table_row(tag=f"{tag_prefix}_tokens_row"):
+                dpg.add_spacer(height=SPACER_HEIGHT)
+
+
+def _build_source_target_table():
     with dpg.table(
         parent="interactive_table",
+        tag="source_target_table",
         header_row=False,
         resizable=False,
         policy=dpg.mvTable_SizingStretchProp,
         width=-1,
     ):
-        dpg.add_table_column(init_width_or_weight=1)
-        dpg.add_table_column(init_width_or_weight=1)
-        with dpg.table_row():
-            with dpg.group(horizontal=True):
-                dpg.add_spacer(width=1)
-                dpg.add_text("Source")
-                dpg.add_spacer(width=1)
+        dpg.add_table_column(label="Source", init_width_or_weight=1)
+        dpg.add_table_column(label="Target", init_width_or_weight=1)
+        dpg.add_table_column(label="Actions", init_width_or_weight=0.6)
 
-            with dpg.group(horizontal=True):
-                dpg.add_spacer(width=1)
-                dpg.add_text("Target")
-                dpg.add_spacer(width=1)
         with dpg.table_row():
-            with dpg.group():
+            with dpg.group(tag="source_cell"):
                 _build_ngram_buttons(
-                    parent=dpg.last_item(),
-                    ngram=AppState.current_source_ngram,
-                    on_click=_filter_source_pairs_interactive,
+                    parent="source_cell",
+                    tag_prefix="source_ngram",
+                )
+
+            with dpg.group(tag="target_cell"):
+                _build_ngram_buttons(
+                    parent="target_cell",
+                    tag_prefix="target_ngram",
                 )
 
             with dpg.group():
-                _build_ngram_buttons(
-                    parent=dpg.last_item(),
-                    ngram=AppState.current_target_ngram,
-                    on_click=_filter_target_pairs_interactive,
+                dpg.add_button(
+                    tag="like_button",
+                    label="Like",
+                    width=-1,
+                    height=WORD_HEIGHT,
+                    callback=_continue_pair,
+                )
+
+                dpg.add_spacer(height=SPACER_HEIGHT)
+
+                dpg.add_button(
+                    tag=SKIP_CONTINUE_BUTTON_TAG,
+                    label="Skip / Continue",
+                    width=-1,
+                    height=WORD_HEIGHT,
+                    callback=_continue_pair,
                 )
 
 
@@ -671,7 +706,7 @@ def _build_confirm_create_file_modal():
         height=120,
     ):
         dpg.add_text("The file does not exist.\nDo you want to create it?")
-        dpg.add_spacer(height=10)
+        dpg.add_spacer(height=SPACER_HEIGHT)
 
         with dpg.group(horizontal=True):
             dpg.add_button(label="Yes", callback=_create_output_file)
@@ -711,7 +746,7 @@ def _build_loading_window():
 
             with dpg.table_row():
                 dpg.add_text("")
-                dpg.add_spacer(height=15)
+                dpg.add_spacer(height=SPACER_HEIGHT)
                 dpg.add_text("")
 
             with dpg.table_row():
@@ -721,7 +756,7 @@ def _build_loading_window():
 
             with dpg.table_row():
                 dpg.add_text("")
-                dpg.add_spacer(height=20)
+                dpg.add_spacer(height=SPACER_HEIGHT)
                 dpg.add_text("")
 
             with dpg.table_row():
@@ -876,26 +911,9 @@ def _build_file_explorer():
                 dpg.add_text("")
 
 
-def _build_interactive_app():
+def _build_interactive_panel():
     with dpg.group(show=False, tag=INTERACTIVE_GROUP_TAG):
-        with dpg.child_window(
-            tag=INTERACTIVE_TABLE_TAG,
-            border=False,
-            autosize_x=True,
-            height=140,
-            no_scrollbar=True,
-        ):
-            pass
-
-    dpg.add_spacer(height=5)
-
-    dpg.add_button(
-        label="Skip / Continue",
-        tag=SKIP_CONTINUE_BUTTON_TAG,
-        width=300,
-        callback=_continue_pair,
-        show=False,
-    )
+        _build_source_target_table()
 
 
 def _build_registries():
@@ -965,10 +983,10 @@ def _build_main_window():
             height=CONTAINER_HEIGHT_DIFF,
         ):
             _build_file_explorer()
-            dpg.add_spacer(height=15)
+            dpg.add_spacer(height=SPACER_HEIGHT)
             _build_action_buttons()
-            dpg.add_spacer(height=10)
-            _build_interactive_app()
+            dpg.add_spacer(height=SPACER_HEIGHT)
+            _build_interactive_panel()
 
         _build_filters_panel()
 
