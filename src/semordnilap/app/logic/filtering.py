@@ -1,11 +1,4 @@
 from collections import defaultdict
-from functools import lru_cache
-
-
-@lru_cache(maxsize=20_000)
-def should_filter_cached(ngram: str, filter_key: tuple[str, ...]) -> bool:
-    filters = set(filter_key)
-    return should_filter_ngram_fast(ngram, filters)
 
 
 def build_inverse_index(
@@ -29,22 +22,6 @@ def get_candidate_indices(
     for f in filters:
         candidates |= index.get(f, set())
     return candidates
-
-
-def generate_subngrams(tokens: list[str]) -> set[str]:
-    result = set()
-    n = len(tokens)
-
-    for size in range(1, n + 1):
-        for i in range(n - size + 1):
-            result.add(" ".join(tokens[i : i + size]))
-    return result
-
-
-def should_filter_ngram(ngram: str, filters: set[str]) -> bool:
-    tokens = ngram.split()
-    subngrams = generate_subngrams(tokens)
-    return not subngrams.isdisjoint(filters)
 
 
 def should_filter_ngram_fast(ngram: str, filters: set[str]) -> bool:

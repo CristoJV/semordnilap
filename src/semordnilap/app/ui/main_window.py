@@ -35,11 +35,45 @@ CONFIRM_CREATE_MODAL_TAG = "confirm_create_modal"
 HEADER_TAG = "header"
 FOOTER_TAG = "footer"
 
+PAIRS_ARE_NOT_LOADED_MSG = "Pairs are not loaded"
+
 HEADER_HEIGHT = 30
 FOOTER_HEIGHT = 30
 
 LOADING_W = 320
 LOADING_H = 160
+
+
+def _check_semordnilaps_loaded() -> bool:
+    if AppState.semordnilaps:
+        return True
+    return False
+
+
+def _check_words_filter_selected(axis: str):
+    if (
+        axis == "source"
+        and AppState.source_words_filter_path is not None
+        and AppState.source_words_filter is not None
+    ):
+        return True
+    elif (
+        axis == "target"
+        and AppState.target_words_filter_path is not None
+        and AppState.target_words_filter is not None
+    ):
+        return True
+    else:
+        return False
+
+
+def _check_pairs_loaded() -> bool:
+    return (
+        AppState.base_pairs is not None
+        and AppState.base_pairs_active_indices is not None
+        and AppState.source_reverse_index is not None
+        and AppState.target_reverse_index is not None
+    )
 
 
 def _set_status(text, ok=True):
@@ -49,7 +83,8 @@ def _set_status(text, ok=True):
     )
 
 
-def _semordnilaps_selected(_, app_data):
+# ----------------------------- Callbacks ---------------------------- #
+def _on_semordnilaps_selected(_, app_data):
     path = app_data["file_path_name"]
 
     try:
@@ -66,18 +101,16 @@ def _semordnilaps_selected(_, app_data):
         dpg.set_value(SEMORDNILAPS_TAG, "No file selected")
         _set_status(f"Invalid file: {e}", ok=False)
 
-    _load_pairs()
+
+def _on_source_words_filter_selected(_, app_data):
+    _on_words_filter_selected(app_data, "source")
 
 
-def _source_words_filter_selected(_, app_data):
-    _load_words_filter(app_data, "source")
+def _on_target_words_filter_selected(_, app_data):
+    _on_words_filter_selected(app_data, "target")
 
 
-def _target_words_filter_selected(_, app_data):
-    _load_words_filter(app_data, "target")
-
-
-def _load_words_filter(app_data, kind):
+def _on_words_filter_selected(app_data, kind):
     path = app_data["file_path_name"]
     filepath = Path(path)
 
@@ -103,6 +136,102 @@ def _load_words_filter(app_data, kind):
     except Exception as e:
         AppState.words_filter = None
         _set_status(f"Error loading words filter: {e}", ok=False)
+
+
+def _on_filter():
+
+    if not _check_pairs_loaded():
+        _set_status(PAIRS_ARE_NOT_LOADED_MSG, ok=False)
+        return
+
+    if not _check_words_filter_selected(
+        "source"
+    ) and not _check_words_filter_selected("target"):
+        _set_status("No Source o Target words filter loaded.", ok=False)
+        return
+
+    _ui_block()
+
+    total = len(AppState.base_pairs)
+
+    if _check_words_filter_selected("source"):
+        _apply_incremental_filter(
+            AppState.source_words_filter,
+            axis="source",
+            on_progress=_on_filtering_progress,
+        )
+
+    if _check_words_filter_selected("target"):
+        _apply_incremental_filter(
+            AppState.target_words_filter,
+            axis="target",
+            on_progress=_on_filtering_progress,
+        )
+
+    _refresh_pairs_view()
+
+    AppState.current_pair_index = 0
+
+    _ui_unblock()
+    _on_filtering_ended(total, len(AppState.pairs_view))
+
+
+def _on_start_interactive():
+    if not _check_pairs_loaded():
+        _set_status(PAIRS_ARE_NOT_LOADED_MSG, ok=False)
+        return
+
+    _refresh_pairs_view()
+    AppState.current_pair_index = 0
+
+    dpg.show_item("interactive_group")
+    dpg.show_item(SKIP_CONTINUE_BUTTON_TAG)
+
+    _advance_pair()
+
+
+def _on_ngram_size_selected(sender, app_data):
+    if not _check_pairs_loaded:
+        _set_status(PAIRS_ARE_NOT_LOADED_MSG, ok=False)
+        return
+    if app_data == "All":
+        AppState.ngram_size_filter = None
+
+    else:
+        AppState.ngram_size_filter = int(app_data)
+        _filter_ngram_size(AppState.ngram_size_filter)
+
+    _refresh_pairs_view()
+    AppState.current_pair_index = 0
+    _advance_pair()
+
+
+def _on_load_pairs():
+
+    if not _check_semordnilaps_loaded():
+        _set_status("Semordnilaps not loaded", ok=False)
+        return
+
+    if AppState.base_pairs:
+        overwrite = True
+    else:
+        overwrite = False
+
+    AppState.base_pairs = build_source_target_pairs(AppState.semordnilaps)
+    AppState.base_pairs_active_indices = set(range(len(AppState.base_pairs)))
+    AppState.source_reverse_index = build_inverse_index(
+        AppState.base_pairs, axis="source"
+    )
+    AppState.target_reverse_index = build_inverse_index(
+        AppState.base_pairs, axis="target"
+    )
+    _set_status(
+        f"{'Loaded' if not overwrite else 'Overwrited previous'} pairs ({len(AppState.base_pairs)} entries)",
+        ok=True,
+    )
+
+
+# -------------------------------------------------------------------- #
 
 
 def _create_output_file():
@@ -141,46 +270,13 @@ def _create_output_file():
         dpg.set_value("_pending_filter_kind", "")
 
 
-def _load_pairs():
-
-    if AppState.semordnilaps is None:
-        _set_status("Semordnilaps not loaded", ok=False)
+def _advance_pair():
+    if not _check_pairs_loaded():
+        _set_status("Pairs are not Loaded", ok=False)
         return
 
-    if not AppState.base_pairs:
-        AppState.base_pairs = build_source_target_pairs(AppState.semordnilaps)
-        AppState.base_pairs_active_indices = set(
-            range(len(AppState.base_pairs))
-        )
-        AppState.source_reverse_index = build_inverse_index(
-            AppState.base_pairs, axis="source"
-        )
-        AppState.target_reverse_index = build_inverse_index(
-            AppState.base_pairs, axis="target"
-        )
-        _set_status(
-            f"Loaded pairs ({len(AppState.base_pairs)} entries)", ok=True
-        )
-
-
-def _start_interactive():
-    if not AppState.pairs_view:
-        _load_pairs()
-    AppState.current_pair_index = 0
-    _refresh_pairs_view()
-
-    dpg.show_item("interactive_group")
-    dpg.show_item(SKIP_CONTINUE_BUTTON_TAG)
-
-    _advance_pair()
-
-
-def _advance_pair():
-
-    if not AppState.pairs_view or AppState.current_pair_index >= len(
-        AppState.pairs_view
-    ):
-        _set_status("Interactive filtering finished ✅", ok=True)
+    if AppState.current_pair_index >= len(AppState.pairs_view):
+        _set_status("Interactive filtering finished", ok=True)
         dpg.hide_item("interactive_group")
         return
 
@@ -191,30 +287,19 @@ def _advance_pair():
 
 
 def _continue_pair():
-    if not AppState.pairs_view or AppState.current_pair_index >= len(
-        AppState.pairs_view
-    ):
+    if not _check_pairs_loaded():
+        _set_status("Pairs are not Loaded", ok=False)
+        return
+    if AppState.current_pair_index >= len(AppState.pairs_view):
         _set_status("Interactive filtering finished ✅", ok=True)
         return
     AppState.current_pair_index += 1
     _advance_pair()
 
 
-def _on_filtering_progress(i: int, total: int):
-    percent = int(i / total * 100)
-    _set_status(f'Filtering words"… {percent}% ({i}/{total})', ok=True)
-    dpg.split_frame()
-
-
-def _on_filtering_ended(src_total: int, dst_total: int):
-    _set_status(
-        f"(Filtered: {src_total - dst_total} entries)",
-        ok=True,
-    )
-
-
 def _get_current_base_index():
-    if not AppState.pairs_view:
+    if not _check_pairs_loaded():
+        _set_status("Pairs are not Loaded", ok=False)
         return
 
     current_pair = AppState.pairs_view[AppState.current_pair_index]
@@ -222,6 +307,9 @@ def _get_current_base_index():
 
 
 def _restore_cursor_after_filter(prev_base_idx: int | None):
+    if not _check_pairs_loaded():
+        _set_status("Pairs are not Loaded", ok=False)
+        return
     active = sorted(AppState.base_pairs_active_indices)
     if not active:
         AppState.current_pair_index = 0
@@ -229,7 +317,7 @@ def _restore_cursor_after_filter(prev_base_idx: int | None):
 
     # If the index continues active
     if prev_base_idx in AppState.base_pairs_active_indices:
-        AppState.current_pair_index = active.inde(prev_base_idx)
+        AppState.current_pair_index = active.index(prev_base_idx)
 
     # If the index stops being active, get the next active pair
     for idx in active:
@@ -244,6 +332,10 @@ def _restore_cursor_after_filter(prev_base_idx: int | None):
 def _apply_incremental_filter(
     filters: set[str], *, axis: str, on_progress: Callable | None = None
 ):
+    if not _check_pairs_loaded():
+        _set_status("Pairs are not Loaded", ok=False)
+        return
+
     index = (
         AppState.source_reverse_index
         if axis == "source"
@@ -274,9 +366,8 @@ def _apply_incremental_filter(
 
 
 def _refresh_pairs_view():
-    if not AppState.base_pairs or not AppState.base_pairs_active_indices:
-        _set_status("Pairs not loaded", ok=False)
-        AppState.current_pair_index = 0
+    if not _check_pairs_loaded():
+        _set_status("Pairs are not Loaded", ok=False)
         return
 
     AppState.pairs_view = [
@@ -290,43 +381,7 @@ def _refresh_pairs_view():
     )
 
 
-def _run_filtering():
-    _ui_block()
-    _load_pairs()
-
-    if not AppState.base_pairs:
-        _set_status("No pairs loaded", ok=False)
-        return
-
-    if (
-        AppState.source_words_filter is None
-        and AppState.target_words_filter is None
-    ):
-        _set_status("No Source o Target words filter loaded.", ok=False)
-
-    total = len(AppState.base_pairs)
-
-    if AppState.source_words_filter:
-        _apply_incremental_filter(
-            AppState.source_words_filter,
-            axis="source",
-            on_progress=_on_filtering_progress,
-        )
-
-    if AppState.target_words_filter:
-        _apply_incremental_filter(
-            AppState.target_words_filter,
-            axis="target",
-            on_progress=_on_filtering_progress,
-        )
-
-    _refresh_pairs_view()
-
-    # When filtering the index is set to 0
-    AppState.current_pair_index = 0
-
-    _ui_unblock()
-    _on_filtering_ended(total, len(AppState.pairs_view))
+# ----------------------------- Filtering ----------------------------
 
 
 def _filter_pairs_interactive(word: str, axis: str):
@@ -385,6 +440,34 @@ def _filter_source_pairs_interactive(word: str):
 
 def _filter_target_pairs_interactive(word: str):
     _filter_pairs_interactive(word, axis="target")
+
+
+def _filter_ngram_size(n: int):
+    if not _check_pairs_loaded():
+        return
+    removed = set()
+
+    for idx in AppState.base_pairs_active_indices:
+        source, target = AppState.base_pairs[idx]
+        if len(target.split()) != n:
+            removed.add(idx)
+    AppState.base_pairs_active_indices -= removed
+
+
+def _on_filtering_progress(i: int, total: int):
+    percent = int(i / total * 100)
+    _set_status(f'Filtering words"… {percent}% ({i}/{total})', ok=True)
+    dpg.split_frame()
+
+
+def _on_filtering_ended(src_total: int, dst_total: int):
+    _set_status(
+        f"(Filtered: {src_total - dst_total} entries)",
+        ok=True,
+    )
+
+
+# -------------------------------------------------------------------- #
 
 
 def _update_interactive_buttons():
@@ -603,7 +686,7 @@ def _build_file_dialogs():
     with dpg.file_dialog(
         directory_selector=False,
         show=False,
-        callback=_semordnilaps_selected,
+        callback=_on_semordnilaps_selected,
         tag=SEMORDNILAPS_DIALOG_TAG,
         user_data=SEMORDNILAPS_TAG,
         width=700,
@@ -613,7 +696,7 @@ def _build_file_dialogs():
 
     with dpg.file_dialog(
         show=False,
-        callback=_source_words_filter_selected,
+        callback=_on_source_words_filter_selected,
         tag=SOURCE_FILTER_DIALOG_TAG,
         width=700,
         height=400,
@@ -622,7 +705,7 @@ def _build_file_dialogs():
 
     with dpg.file_dialog(
         show=False,
-        callback=_target_words_filter_selected,
+        callback=_on_target_words_filter_selected,
         tag=TARGET_FILTER_DIALOG_TAG,
         width=700,
         height=400,
@@ -647,14 +730,19 @@ def _build_action_buttons():
         show=True,
     ):
         dpg.add_button(
+            label="Load pairs",
+            width=100,
+            callback=_on_load_pairs,
+        )
+        dpg.add_button(
             label="Filter",
             width=100,
-            callback=_run_filtering,
+            callback=_on_filter,
         )
         dpg.add_button(
             label="Start",
             width=100,
-            callback=_start_interactive,
+            callback=_on_start_interactive,
         )
         dpg.add_button(
             label="Export",
@@ -716,6 +804,15 @@ def _build_file_explorer():
                     width=80,
                     callback=lambda: dpg.show_item("target_filter_dialog"),
                 )
+            with dpg.table_row():
+                dpg.add_text("N-gram size:")
+                dpg.add_combo(
+                    items=["All", "1", "2", "3"],
+                    default_value="All",
+                    width=-1,
+                    callback=_on_ngram_size_selected,
+                )
+                dpg.add_text("")
 
 
 def _build_interactive_app():
