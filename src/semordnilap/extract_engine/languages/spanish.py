@@ -93,17 +93,18 @@ class SpanishEngine(BaseLanguageEngine):
             Traducciones, Véase, Etimología, Información, etc.
         """
         categories: set[str] = set()
+        SPANISH_POS_RE = re.compile(
+            r"^(={3,5})\s*(?:\{\{\s*([^}|]+).*?\}\}|([^=\n]+))\s*\1\s*$",
+            re.M,
+        )
+        for m in SPANISH_POS_RE.finditer(section):
+            template_label = m.group(2)
+            text_label = m.group(3)
 
-        for m in POS_HEADER_RE.finditer(section):
-            body = (m.group("body") or "").strip()
-
-            tm = HEADER_TEMPLATE_RE.search(body)
-            if tm:
-                label = tm.group(1)
-            else:
-                label = body
-
+            label = template_label or text_label
             base_category = get_base_category(label)
-            if base_category:
+
+            if base_category in DEFAULT_DESIRED_CATEGORIES:
                 categories.add(base_category)
+
         return categories
