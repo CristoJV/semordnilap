@@ -458,7 +458,16 @@ def _refresh_semordnilaps_list():
     dpg.delete_item("semordnilaps_list", children_only=True)
 
     for source, target in AppState.pairs_view:
-        dpg.add_text(f"{source} <-> {target}", parent="semordnilaps_list")
+        label = f"{source} <-> {target}"
+
+        dpg.add_button(
+            label=label,
+            parent="semordnilaps_list",
+            width=-1,  # ← ocupa todo el ancho
+            height=WORD_HEIGHT,
+            user_data=(source, target),
+            callback=_on_semordnilap_selected,
+        )
 
 
 # ----------------------------- Filtering ----------------------------
@@ -506,6 +515,7 @@ def _filter_pairs_interactive(word: str, axis: str):
         {word}, axis=axis, on_progress=_on_filtering_progress
     )
     _refresh_pairs_view()
+    _refresh_semordnilaps_list()
     _restore_cursor_after_filter(prev_base_idx)
 
     _ui_unblock()
@@ -547,6 +557,16 @@ def _on_filtering_ended(src_total: int, dst_total: int):
         f"Filtered: {src_total - dst_total}/{src_total} ({percentaje:.0f}%) entries - Keeped: {dst_total} entries",
         ok=True,
     )
+
+
+def _on_semordnilap_selected(sender, app_data, user_data):
+    source, target = user_data
+    try:
+        idx = AppState.pairs_view.index((source, target))
+    except ValueError:
+        return
+    AppState.current_pair_index = idx
+    _advance_pair()
 
 
 # -------------------------------------------------------------------- #
