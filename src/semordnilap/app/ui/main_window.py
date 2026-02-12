@@ -204,24 +204,12 @@ def _on_filter():
         )
 
     _refresh_pairs_view()
-
+    _refresh_semordnilaps_list()
     AppState.current_pair_index = 0
+    _advance_pair()
 
     _ui_unblock()
     _on_filtering_ended(total, len(AppState.pairs_view))
-
-
-def _on_start_interactive():
-    if not _check_pairs_loaded():
-        _set_status(PAIRS_ARE_NOT_LOADED_MSG, ok=False)
-        return
-
-    _refresh_pairs_view()
-    AppState.current_pair_index = 0
-
-    dpg.show_item(INTERACTIVE_PANEL_TAG)
-
-    _advance_pair()
 
 
 def _on_source_ngram_size_selected(sender, app_data):
@@ -277,6 +265,11 @@ def _on_load_pairs():
         f"{'Loaded' if not overwrite else 'Overwrited previous'} pairs ({len(AppState.base_pairs)} entries)",
         ok=True,
     )
+
+    _refresh_pairs_view()
+    _refresh_semordnilaps_list()
+    AppState.current_pair_index = 0
+    _advance_pair()
 
 
 # -------------------------------------------------------------------- #
@@ -455,6 +448,17 @@ def _refresh_filters_view():
             key=lambda s: (len(s.split()), len(s)),
         ):
             dpg.add_text(word, parent=TARGET_FILTER_VIEW_TAG)
+
+
+def _refresh_semordnilaps_list():
+
+    if not _check_pairs_loaded():
+        return
+
+    dpg.delete_item("semordnilaps_list", children_only=True)
+
+    for source, target in AppState.pairs_view:
+        dpg.add_text(f"{source} ↔ {target}", parent="semordnilaps_list")
 
 
 # ----------------------------- Filtering ----------------------------
@@ -852,11 +856,6 @@ def _build_action_buttons():
             callback=_on_filter,
         )
         dpg.add_button(
-            label="Start",
-            width=110,
-            callback=_on_start_interactive,
-        )
-        dpg.add_button(
             label="Export",
             width=110,
             callback=lambda: dpg.show_item("export_dialog"),
@@ -964,11 +963,12 @@ def _build_interactive_panel():
                     _build_source_target_table()
 
                 with dpg.child_window(
+                    tag="semordnilaps_list",
                     border=True,
                     height=-1,
                     autosize_x=True,
                 ):
-                    dpg.add_text("Semordnilaps list")
+                    pass
 
 
 def _build_registries():
