@@ -434,11 +434,10 @@ def _refresh_filters_view():
     dpg.delete_item(TARGET_FILTER_VIEW_TAG, children_only=True)
 
     if AppState.source_words_filter:
-        dpg.add_text(
-            f"Total: {len(AppState.source_words_filter)}",
-            parent=SOURCE_FILTER_VIEW_TAG,
+        dpg.set_value(
+            "source_loaded_label",
+            f"Loaded (Total: {len(AppState.source_words_filter)})",
         )
-        dpg.add_separator(parent=SOURCE_FILTER_VIEW_TAG)
         for word in sorted(
             AppState.source_words_filter,
             key=lambda s: (len(s.split()), len(s)),
@@ -446,9 +445,9 @@ def _refresh_filters_view():
             dpg.add_text(word, parent=SOURCE_FILTER_VIEW_TAG)
 
     if AppState.target_words_filter:
-        dpg.add_text(
-            f"Total: {len(AppState.target_words_filter)}",
-            parent=TARGET_FILTER_VIEW_TAG,
+        dpg.set_value(
+            "target_loaded_label",
+            f"Loaded (Total: {len(AppState.target_words_filter)})",
         )
         dpg.add_separator(parent=TARGET_FILTER_VIEW_TAG)
         for word in sorted(
@@ -984,7 +983,7 @@ def _build_filters_panel():
         border=True,
         autosize_x=True,
         width=-1,
-        no_scrollbar=False,
+        no_scrollbar=True,
     ):
         dpg.add_text("Filters")
         dpg.add_separator()
@@ -996,71 +995,91 @@ def _build_filters_panel():
             width=-1,
             borders_innerV=True,
         ):
-            dpg.add_table_column()  # Source
-            dpg.add_table_column()  # Target
+            dpg.add_table_column()
+            dpg.add_table_column()
 
             with dpg.table_row():
                 # ================= SOURCE =================
                 with dpg.group():
-                    dpg.add_text("Source Filters")
+                    with dpg.group(horizontal=True):
+                        dpg.add_text("Source Filters")
+                        dpg.add_spacer(width=10)
+                        dpg.add_button(label="Save", width=BUTTON_WIDTH)
 
-                    dpg.add_button(
-                        label="Save Source Filters",
-                        width=BUTTON_WIDTH,
-                    )
+                    dpg.add_spacer(height=4)
 
-                    dpg.add_spacer(height=5)
+                    with dpg.child_window(height=-1, border=False):
+                        with dpg.table(
+                            header_row=False,
+                            resizable=False,
+                            policy=dpg.mvTable_SizingStretchProp,
+                            width=-1,
+                        ):
+                            dpg.add_table_column()
+                            dpg.add_table_column()
 
-                    dpg.add_text("Selected (current session)")
+                            with dpg.table_row():
+                                dpg.add_text("Selected")
+                                dpg.add_text(
+                                    "Loaded (Total: 0)",
+                                    tag="source_loaded_label",
+                                )
 
-                    with dpg.child_window(
-                        tag="selected_source_filters",
-                        height=FILTER_BOX_HEIGHT,
-                        border=True,
-                    ):
-                        pass
+                            with dpg.table_row():
+                                with dpg.child_window(
+                                    tag="selected_source_filters",
+                                    height=-1,
+                                    border=True,
+                                ):
+                                    pass
 
-                    dpg.add_spacer(height=5)
-
-                    dpg.add_text("Loaded (persistent)")
-
-                    with dpg.child_window(
-                        tag=SOURCE_FILTER_VIEW_TAG,
-                        height=FILTER_BOX_HEIGHT,
-                        border=True,
-                    ):
-                        pass
+                                with dpg.child_window(
+                                    tag=SOURCE_FILTER_VIEW_TAG,
+                                    height=-1,
+                                    border=True,
+                                ):
+                                    pass
 
                 # ================= TARGET =================
                 with dpg.group():
-                    dpg.add_text("Target Filters")
+                    with dpg.group(horizontal=True):
+                        dpg.add_text("Target Filters")
+                        dpg.add_spacer(width=10)
+                        dpg.add_button(label="Save", width=BUTTON_WIDTH)
 
-                    dpg.add_button(
-                        label="Save Target Filters",
-                        width=BUTTON_WIDTH,
-                    )
+                    dpg.add_spacer(height=4)
 
-                    dpg.add_spacer(height=5)
+                    with dpg.child_window(height=-1, border=False):
+                        with dpg.table(
+                            header_row=False,
+                            resizable=False,
+                            policy=dpg.mvTable_SizingStretchProp,
+                            width=-1,
+                        ):
+                            dpg.add_table_column()
+                            dpg.add_table_column()
 
-                    dpg.add_text("Selected (current session)")
+                            with dpg.table_row():
+                                dpg.add_text("Selected")
+                                dpg.add_text(
+                                    "Loaded (Total: 0)",
+                                    tag="target_loaded_label",
+                                )
 
-                    with dpg.child_window(
-                        tag="selected_target_filters",
-                        height=FILTER_BOX_HEIGHT,
-                        border=True,
-                    ):
-                        pass
+                            with dpg.table_row():
+                                with dpg.child_window(
+                                    tag="selected_target_filters",
+                                    height=-1,
+                                    border=True,
+                                ):
+                                    pass
 
-                    dpg.add_spacer(height=5)
-
-                    dpg.add_text("Loaded (persistent)")
-
-                    with dpg.child_window(
-                        tag=TARGET_FILTER_VIEW_TAG,
-                        height=FILTER_BOX_HEIGHT,
-                        border=True,
-                    ):
-                        pass
+                                with dpg.child_window(
+                                    tag=TARGET_FILTER_VIEW_TAG,
+                                    height=-1,
+                                    border=True,
+                                ):
+                                    pass
 
 
 def _build_main_window():
