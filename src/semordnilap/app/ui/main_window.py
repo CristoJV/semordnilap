@@ -28,10 +28,11 @@ TARGET_FILTER_DIALOG_TAG = "target_filter_dialog"
 EXPORT_DIALOG_TAG = "export_dialog"
 MAIN_WINDOW_TAG = "main_window"
 CONTENT_AREA_TAG = "content_area"
-INTERACTIVE_GROUP_TAG = "interactive_group"
+INTERACTIVE_PANEL_TAG = "interactive_group"
 INTERACTIVE_TABLE_TAG = "interactive_table"
 SKIP_CONTINUE_BUTTON_TAG = "skip_continue_button"
 CONFIRM_CREATE_MODAL_TAG = "confirm_create_modal"
+FILE_EXPLORER_PANEL_TAG = "file_explorer"
 HEADER_TAG = "header"
 FOOTER_TAG = "footer"
 
@@ -39,17 +40,42 @@ SOURCE_FILTER_VIEW_TAG = "source_filter_view"
 TARGET_FILTER_VIEW_TAG = "target_filter_view"
 FILTERS_PANEL_TAG = "filters_panel"
 
-PAIRS_ARE_NOT_LOADED_MSG = "Pairs are not loaded"
 
+PAIRS_ARE_NOT_LOADED_MSG = "Pairs are not loaded"
+LAYOUT_VERTICAL_SAFETY = 8
+FILTER_BOX_HEIGHT = 90
+BUTTON_WIDTH = 140
 HEADER_HEIGHT = 30
-FOOTER_HEIGHT = 30
+FOOTER_HEIGHT = HEADER_HEIGHT
+FILE_EXPLORER_PANEL_SIZE = 90
+
 WORD_HEIGHT = 28
 SPACER_HEIGHT = 5
-FILTERS_PANEL_HEIGHT = 160
-CONTAINER_HEIGHT_DIFF = -HEADER_HEIGHT - FOOTER_HEIGHT - FILTERS_PANEL_HEIGHT
 
 LOADING_W = 320
 LOADING_H = 160
+
+
+def _on_viewport_resize(sender, app_data):
+    vw = dpg.get_viewport_width()
+    vh = dpg.get_viewport_height()
+
+    usable_h = vh - HEADER_HEIGHT * 2 - FOOTER_HEIGHT
+
+    content_h = int(usable_h * 0.6)
+    filters_h = usable_h - content_h
+
+    # HEADER
+    dpg.configure_item(HEADER_TAG, width=vw, height=HEADER_HEIGHT)
+
+    # CONTENT_AREA
+    dpg.configure_item(CONTENT_AREA_TAG, width=vw, height=content_h)
+
+    # FILTERS_PANEL
+    dpg.configure_item(FILTERS_PANEL_TAG, width=vw, height=filters_h)
+
+    # FOOTER
+    dpg.configure_item(FOOTER_TAG, width=vw, height=FOOTER_HEIGHT)
 
 
 def _check_semordnilaps_loaded() -> bool:
@@ -193,7 +219,7 @@ def _on_start_interactive():
     _refresh_pairs_view()
     AppState.current_pair_index = 0
 
-    dpg.show_item(INTERACTIVE_GROUP_TAG)
+    dpg.show_item(INTERACTIVE_PANEL_TAG)
 
     _advance_pair()
 
@@ -299,7 +325,7 @@ def _advance_pair():
 
     if AppState.current_pair_index >= len(AppState.pairs_view):
         _set_status("Interactive filtering finished", ok=True)
-        dpg.hide_item(INTERACTIVE_GROUP_TAG)
+        dpg.hide_item(INTERACTIVE_PANEL_TAG)
         return
 
     current_pair = AppState.pairs_view[AppState.current_pair_index]
@@ -555,14 +581,14 @@ def _export_dialog_selected(_, app_data):
 def _ui_block():
     _center_window("loading_overlay", LOADING_W, LOADING_H)
     dpg.show_item("loading_overlay")
-    dpg.disable_item(INTERACTIVE_GROUP_TAG)
+    dpg.disable_item(INTERACTIVE_PANEL_TAG)
 
     dpg.split_frame()
 
 
 def _ui_unblock():
     dpg.hide_item("loading_overlay")
-    dpg.enable_item(INTERACTIVE_GROUP_TAG)
+    dpg.enable_item(INTERACTIVE_PANEL_TAG)
 
 
 def _center_window(tag: str, width: int, height: int):
@@ -628,6 +654,7 @@ def _build_ngram_buttons(parent: str, tag_prefix: str):
     with dpg.group(parent=parent, tag=f"{tag_prefix}_root"):
         dpg.add_button(
             tag=f"{tag_prefix}_phrase",
+            label="",
             width=-1,
             height=WORD_HEIGHT,
         )
@@ -641,7 +668,6 @@ def _build_ngram_buttons(parent: str, tag_prefix: str):
             policy=dpg.mvTable_SizingStretchProp,
             width=-1,
         ):
-            # Siempre al menos una columna
             dpg.add_table_column(init_width_or_weight=1)
 
             with dpg.table_row(tag=f"{tag_prefix}_tokens_row"):
@@ -818,28 +844,32 @@ def _build_action_buttons():
     ):
         dpg.add_button(
             label="Load pairs",
-            width=100,
+            width=110,
             callback=_on_load_pairs,
         )
         dpg.add_button(
             label="Filter",
-            width=100,
+            width=110,
             callback=_on_filter,
         )
         dpg.add_button(
             label="Start",
-            width=100,
+            width=110,
             callback=_on_start_interactive,
         )
         dpg.add_button(
             label="Export",
-            width=100,
+            width=110,
             callback=lambda: dpg.show_item("export_dialog"),
         )
 
 
 def _build_file_explorer():
-    with dpg.collapsing_header(label="Files", default_open=True):
+    with dpg.collapsing_header(
+        label="Files and Filters",
+        default_open=True,
+        tag=FILE_EXPLORER_PANEL_TAG,
+    ):
         with dpg.table(
             header_row=False,
             resizable=False,
@@ -850,6 +880,7 @@ def _build_file_explorer():
             dpg.add_table_column(width_stretch=True)
             dpg.add_table_column(width_fixed=True, init_width_or_weight=90)
 
+            # Semordnilaps
             with dpg.table_row():
                 dpg.add_text("Semordnilaps file:")
                 dpg.add_input_text(
@@ -864,6 +895,7 @@ def _build_file_explorer():
                     callback=lambda: _open_file_dialog("semordnilaps_dialog"),
                 )
 
+            # Source filter
             with dpg.table_row():
                 dpg.add_text("Source words filter:")
                 dpg.add_input_text(
@@ -878,6 +910,7 @@ def _build_file_explorer():
                     callback=lambda: dpg.show_item("source_filter_dialog"),
                 )
 
+            # Target filter
             with dpg.table_row():
                 dpg.add_text("Target words filter:")
                 dpg.add_input_text(
@@ -891,29 +924,52 @@ def _build_file_explorer():
                     width=80,
                     callback=lambda: dpg.show_item("target_filter_dialog"),
                 )
-            with dpg.table_row():
-                dpg.add_text("Source N-gram size:")
-                dpg.add_combo(
-                    items=["All", "1", "2", "3"],
-                    default_value="All",
-                    width=-1,
-                    callback=_on_source_ngram_size_selected,
-                )
-                dpg.add_text("")
-            with dpg.table_row():
-                dpg.add_text("Target N-gram size:")
-                dpg.add_combo(
-                    items=["All", "1", "2", "3"],
-                    default_value="All",
-                    width=-1,
-                    callback=_on_target_ngram_size_selected,
-                )
-                dpg.add_text("")
+
+        dpg.add_spacer(height=0)
+
+        # Ngram size selectors
+        with dpg.group(horizontal=True):
+            dpg.add_text("Source N-gram size:")
+            dpg.add_combo(
+                items=["All", "1", "2", "3"],
+                default_value="All",
+                width=120,
+                callback=_on_source_ngram_size_selected,
+            )
+
+            dpg.add_spacer(width=20)
+
+            dpg.add_text("Target N-gram size:")
+            dpg.add_combo(
+                items=["All", "1", "2", "3"],
+                default_value="All",
+                width=120,
+                callback=_on_target_ngram_size_selected,
+            )
+            dpg.add_text("")
 
 
 def _build_interactive_panel():
-    with dpg.group(show=False, tag=INTERACTIVE_GROUP_TAG):
-        _build_source_target_table()
+    with dpg.group(show=True, tag=INTERACTIVE_PANEL_TAG):
+        with dpg.table(
+            header_row=False,
+            resizable=False,
+            policy=dpg.mvTable_SizingStretchProp,
+            width=-1,
+        ):
+            dpg.add_table_column(label="Interactive", init_width_or_weight=1)
+            dpg.add_table_column(label="Semordnilaps", init_width_or_weight=1)
+
+            with dpg.table_row():
+                with dpg.group():
+                    _build_source_target_table()
+
+                with dpg.child_window(
+                    border=True,
+                    height=-1,
+                    autosize_x=True,
+                ):
+                    dpg.add_text("Semordnilaps list")
 
 
 def _build_registries():
@@ -924,35 +980,85 @@ def _build_registries():
 
 def _build_filters_panel():
     with dpg.child_window(
-        tag="filters_panel",
+        tag=FILTERS_PANEL_TAG,
         border=True,
         autosize_x=True,
-        height=160,
+        width=-1,
+        no_scrollbar=False,
     ):
+        dpg.add_text("Filters")
+        dpg.add_separator()
+
         with dpg.table(
-            header_row=True,
+            header_row=False,
+            resizable=False,
             policy=dpg.mvTable_SizingStretchProp,
             width=-1,
+            borders_innerV=True,
         ):
-            dpg.add_table_column(label="Source filter")
-            dpg.add_table_column(label="Target filter")
+            dpg.add_table_column()  # Source
+            dpg.add_table_column()  # Target
 
             with dpg.table_row():
+                # ================= SOURCE =================
                 with dpg.group():
+                    dpg.add_text("Source Filters")
+
+                    dpg.add_button(
+                        label="Save Source Filters",
+                        width=BUTTON_WIDTH,
+                    )
+
+                    dpg.add_spacer(height=5)
+
+                    dpg.add_text("Selected (current session)")
+
                     with dpg.child_window(
-                        tag=SOURCE_FILTER_VIEW_TAG,
-                        border=False,
-                        height=-1,
-                        autosize_x=True,
+                        tag="selected_source_filters",
+                        height=FILTER_BOX_HEIGHT,
+                        border=True,
                     ):
                         pass
 
+                    dpg.add_spacer(height=5)
+
+                    dpg.add_text("Loaded (persistent)")
+
+                    with dpg.child_window(
+                        tag=SOURCE_FILTER_VIEW_TAG,
+                        height=FILTER_BOX_HEIGHT,
+                        border=True,
+                    ):
+                        pass
+
+                # ================= TARGET =================
                 with dpg.group():
+                    dpg.add_text("Target Filters")
+
+                    dpg.add_button(
+                        label="Save Target Filters",
+                        width=BUTTON_WIDTH,
+                    )
+
+                    dpg.add_spacer(height=5)
+
+                    dpg.add_text("Selected (current session)")
+
+                    with dpg.child_window(
+                        tag="selected_target_filters",
+                        height=FILTER_BOX_HEIGHT,
+                        border=True,
+                    ):
+                        pass
+
+                    dpg.add_spacer(height=5)
+
+                    dpg.add_text("Loaded (persistent)")
+
                     with dpg.child_window(
                         tag=TARGET_FILTER_VIEW_TAG,
-                        border=False,
-                        height=-1,
-                        autosize_x=True,
+                        height=FILTER_BOX_HEIGHT,
+                        border=True,
                     ):
                         pass
 
@@ -965,37 +1071,44 @@ def _build_main_window():
         no_resize=True,
         no_move=True,
     ):
+        # HEADER
         with dpg.child_window(
             tag=HEADER_TAG,
             border=True,
             autosize_x=True,
             height=HEADER_HEIGHT,
-            no_scrollbar=True,
         ):
             with dpg.group(horizontal=True):
                 dpg.add_text("Status:", color=(180, 180, 180))
                 dpg.add_text("", tag=STATUS_TAG)
 
+        # CONTENT
         with dpg.child_window(
             tag=CONTENT_AREA_TAG,
             border=False,
             autosize_x=True,
-            height=CONTAINER_HEIGHT_DIFF,
+            height=1,
         ):
             _build_file_explorer()
             dpg.add_spacer(height=SPACER_HEIGHT)
+
             _build_action_buttons()
             dpg.add_spacer(height=SPACER_HEIGHT)
-            _build_interactive_panel()
+            with dpg.child_window(
+                height=-1,
+                border=False,
+            ):
+                _build_interactive_panel()
 
+        # FILTERS
         _build_filters_panel()
 
+        # FOOTER
         with dpg.child_window(
             tag=FOOTER_TAG,
             border=False,
             autosize_x=True,
             height=FOOTER_HEIGHT,
-            no_scrollbar=True,
         ):
             with dpg.table(
                 header_row=False,
@@ -1018,6 +1131,7 @@ def _build_main_window():
 
 
 def build_ui():
+    dpg.set_viewport_resize_callback(_on_viewport_resize)
     _build_registries()
     _build_loading_window()
     _build_file_dialogs()

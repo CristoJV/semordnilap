@@ -1,6 +1,9 @@
 import dearpygui.dearpygui as dpg
 
-from semordnilap.app.ui.main_window import build_ui
+from semordnilap.app.ui.main_window import (
+    _on_viewport_resize,
+    build_ui,
+)
 
 
 def run():
@@ -13,5 +16,6 @@ def run():
     )
     dpg.setup_dearpygui()
     dpg.show_viewport()
+    _on_viewport_resize(None, None)
     dpg.start_dearpygui()
     dpg.destroy_context()
