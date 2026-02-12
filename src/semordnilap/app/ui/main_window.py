@@ -458,7 +458,7 @@ def _refresh_semordnilaps_list():
     dpg.delete_item("semordnilaps_list", children_only=True)
 
     for source, target in AppState.pairs_view:
-        dpg.add_text(f"{source} ↔ {target}", parent="semordnilaps_list")
+        dpg.add_text(f"{source} <-> {target}", parent="semordnilaps_list")
 
 
 # ----------------------------- Filtering ----------------------------
