@@ -48,6 +48,8 @@ class AppState:
 
     source_words_filter: set[str] | None = None
     target_words_filter: set[str] | None = None
+    selected_source_words_filter: set[str] = set()
+    seletect_target_words_filter: set[str] = set()
     source_ngram_size_filter: int = 0
     target_ngram_size_filter: int = 0
 

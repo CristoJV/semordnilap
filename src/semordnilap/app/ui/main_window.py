@@ -470,41 +470,67 @@ def _refresh_semordnilaps_list():
         )
 
 
+def _refresh_selected_filters_view():
+
+    dpg.delete_item("selected_source_filters", children_only=True)
+    dpg.delete_item("selected_target_filters", children_only=True)
+
+    for word in sorted(AppState.selected_source_words_filter):
+        dpg.add_text(word, parent="selected_source_filters")
+
+    for word in sorted(AppState.seletect_target_words_filter):
+        dpg.add_text(word, parent="selected_target_filters")
+
+
+def _save_filters(axis: str):
+
+    if axis == "source":
+        path = AppState.source_words_filter_path
+        selected = AppState.selected_source_words_filter
+        current = AppState.source_words_filter
+
+    else:
+        path = AppState.target_words_filter_path
+        selected = AppState.seletect_target_words_filter
+        current = AppState.target_words_filter
+
+    if not path or not current:
+        _set_status(f"No {axis} filter file loaded", False)
+        return
+
+    for word in sorted(selected):
+        append_word_if_missing(
+            filepath=path,
+            word=word,
+            current_words=current,
+        )
+
+    selected.clear()
+
+    # Reload desde disco → evita inconsistencias
+    if axis == "source":
+        AppState.source_words_filter = load_words_filter(path)
+    else:
+        AppState.target_words_filter = load_words_filter(path)
+
+    _refresh_filters_view()
+    _refresh_selected_filters_view()
+
+
 # ----------------------------- Filtering ----------------------------
 
 
 def _filter_pairs_interactive(word: str, axis: str):
 
     if axis == "source":
-        if (
-            AppState.source_words_filter is None
-            or AppState.source_words_filter_path is None
-        ):
-            _set_status("Source words filter file not loaded", ok=False)
-            return
-        filter_path = AppState.source_words_filter_path
-        filter_set = AppState.source_words_filter
-
+        AppState.selected_source_words_filter.add(word)
     else:
-        if (
-            AppState.target_words_filter is None
-            or AppState.target_words_filter_path is None
-        ):
-            _set_status("Target words filter file not loaded", ok=False)
-            return
-        filter_path = AppState.target_words_filter_path
-        filter_set = AppState.target_words_filter
+        AppState.seletect_target_words_filter.add(word)
 
     _ui_block()
 
-    append_word_if_missing(
-        filepath=filter_path,
-        word=word,
-        current_words=filter_set,
-    )
-
     _set_status(
-        f'Added "{word}" to target filter',
+        f'Added "{word}" to {axis} filter',
         ok=True,
     )
 
@@ -521,6 +547,7 @@ def _filter_pairs_interactive(word: str, axis: str):
     _ui_unblock()
     _on_filtering_ended(total, len(AppState.pairs_view))
 
+    _refresh_selected_filters_view()
     _advance_pair()
 
 
@@ -1024,7 +1051,11 @@ def _build_filters_panel():
                     with dpg.group(horizontal=True):
                         dpg.add_text("Source Filters")
                         dpg.add_spacer(width=10)
-                        dpg.add_button(label="Save", width=BUTTON_WIDTH)
+                        dpg.add_button(
+                            label="Save",
+                            width=BUTTON_WIDTH,
+                            callback=lambda: _save_filters("source"),
+                        )
 
                     dpg.add_spacer(height=4)
 
@@ -1065,7 +1096,11 @@ def _build_filters_panel():
                     with dpg.group(horizontal=True):
                         dpg.add_text("Target Filters")
                         dpg.add_spacer(width=10)
-                        dpg.add_button(label="Save", width=BUTTON_WIDTH)
+                        dpg.add_button(
+                            label="Save",
+                            width=BUTTON_WIDTH,
+                            callback=lambda: _save_filters("target"),
+                        )
 
                     dpg.add_spacer(height=4)
 
