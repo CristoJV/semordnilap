@@ -5,22 +5,18 @@ import logging
 import sys
 import unicodedata
 from collections import defaultdict
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 
 from tqdm import tqdm
 from wordfreq import zipf_frequency
+
+from semordnilap.load import load_lexicon
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-
-def load_words(words_filepath: Path) -> object:
-    with open(words_filepath, "r", encoding="utf-8") as f:
-        return [line.strip() for line in f if line.strip()]
 
 
 def filter_common_words(
@@ -177,11 +173,11 @@ def main(argv: list[str] | None = None) -> int:
     logger.info(
         "Loading source lexicon from: %s", opts.source_lexicon_filepath
     )
-    source_lexicon = load_words(opts.source_lexicon_filepath)
+    source_lexicon = load_lexicon(opts.source_lexicon_filepath)
     logger.info(
         "Loading target lexicon from: %s", opts.target_lexicon_filepath
     )
-    target_lexicon = load_words(opts.target_lexicon_filepath)
+    target_lexicon = load_lexicon(opts.target_lexicon_filepath)
 
     logger.info("Looking for semordnilaps...")
     semordnilaps = find_semordnilaps(
