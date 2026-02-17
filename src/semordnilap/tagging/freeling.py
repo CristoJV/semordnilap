@@ -5,7 +5,44 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
-logger = log
+logger = logging.getLogger(__name__)
+
+
+def freeling_pos_to_human(pos: str) -> str | None:
+
+    if pos.startswith("I"):
+        return "interjección"
+
+    if pos.startswith(("NC", "NP")):
+        return "sustantivo"
+
+    if pos.startswith("AQ"):
+        return "adjetivo"
+
+    if pos.startswith(("RG", "RN")):
+        return "adverbio"
+
+    if pos.startswith("SP"):
+        return "preposición"
+
+    if pos.startswith(("CC", "CS")):
+        return "conjunción"
+
+    if pos.startswith("D"):
+        return "determinante"
+
+    if pos.startswith("P"):
+        return "pronombre"
+
+    if pos.startswith("Z"):
+        return "numeral"
+
+    if pos.startswith("VM"):
+        if pos.startswith("VMN"):
+            return "verbo"
+        return "forma"
+
+    return None
 
 
 class FreelingAnalyzer:
