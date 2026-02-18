@@ -17,7 +17,7 @@ dependencies = [
 semordnilap = "semordnilap:main"
 sp_dict = "semordnilap.extract_engine.main:main"
 sp_lexicon = "semordnilap.lexicon.main:main"
-sp_find = "semordnilap.search_engine:main"
+sp_find = "semordnilap.search.engine:main"
 sp_app = "semordnilap.app.app:run"
 
 [build-system]
