@@ -6,6 +6,7 @@ import sys
 import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass
+from itertools import product
 
 from tqdm import tqdm
 from wordfreq import zipf_frequency
@@ -98,11 +99,26 @@ def find_semordnilaps(
         )
 
         for sol in solutions:
-            phrase = " ".join(sol)
-            word_count = len(sol)
-            semordnilaps[query_ngram][word_count].add(phrase)
+            expanded_phrases = expand_normalized_solutions(
+                sol, dst_norm_to_origins_dict
+            )
+
+            for phrase in expanded_phrases:
+                word_count = len(phrase.split())
+                semordnilaps[query_ngram][word_count].add(phrase)
 
     return semordnilaps
+
+
+def expand_normalized_solutions(
+    normalized_ngrams: list[str], norm_to_origins: dict[str, set[str]]
+) -> list[str]:
+    origins_per_ngram = []
+    for ngram in normalized_ngrams:
+        origins = norm_to_origins.get(ngram)
+        origins_per_ngram.append(origins or [ngram])
+
+    return [" ".join(combo) for combo in product(*origins_per_ngram)]
 
 
 def save_semordnilaps(
