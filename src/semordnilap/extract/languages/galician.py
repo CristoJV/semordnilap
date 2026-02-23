@@ -2,7 +2,7 @@ import bz2
 import re
 import xml.etree.ElementTree as ET
 
-from semordnilap.extract_engine.base import BaseLanguageEngine
+from semordnilap.extract.base import BaseLanguageEngine
 
 
 def iter_gl_conj_templates(dump_path: str):

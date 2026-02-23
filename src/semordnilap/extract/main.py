@@ -6,8 +6,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Iterable
 
-from semordnilap.extract_engine.core import iter_pages
-from semordnilap.extract_engine.languages import LANGUAGE_ENGINES
+from semordnilap.extract.core import iter_pages
+from semordnilap.extract.languages import LANGUAGE_ENGINES
 
 logging.basicConfig(
     level=logging.DEBUG,

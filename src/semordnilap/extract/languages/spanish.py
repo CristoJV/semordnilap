@@ -1,6 +1,6 @@
 import re
 
-from semordnilap.extract_engine.base import BaseLanguageEngine
+from semordnilap.extract.base import BaseLanguageEngine
 
 DEFAULT_DESIRED_CATEGORIES = {
     "adjetivo",
