@@ -19,6 +19,7 @@ sp_dict = "semordnilap.extract.main:main"
 sp_lexicon = "semordnilap.lexicon.main:main"
 sp_find = "semordnilap.search.engine:main"
 sp_app = "semordnilap.app.app:run"
+sp_pattern = "semordnilap.pattern.main:main"
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]
