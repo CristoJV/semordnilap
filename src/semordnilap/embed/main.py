@@ -4,8 +4,9 @@ from pathlib import Path
 
 import faiss
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
+from semordnilap.embed.engine import EmbeddingEngine
+from semordnilap.embed.factory import load_engine
 from semordnilap.load import load_embeddings, load_lexicon
 
 logging.basicConfig(
@@ -16,9 +17,6 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
 logging.getLogger("transformers").setLevel(logging.WARNING)
-
-# MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
-MODEL_NAME = "intfloat/multilingual-e5-base"
 
 
 def build_faiss_index(embeddings: np.ndarray) -> faiss.Index:
@@ -42,11 +40,9 @@ def load_faiss_index(path: Path) -> faiss.Index:
 
 
 def query_index(
-    query: str, index: faiss.Index, model: SentenceTransformer, k: int
+    query: str, index: faiss.Index, engine: EmbeddingEngine, k: int
 ):
-    query_vec = model.encode(
-        [f"query: {query}"], convert_to_numpy=True
-    ).astype("float32")
+    query_vec = engine.encode_query(query).astype("float32")
     faiss.normalize_L2(query_vec)
     scores, indices = index.search(query_vec, k)
     return scores[0], indices[0]
@@ -79,6 +75,7 @@ def build_argparser():
     build_parser.add_argument(
         "--build-index", action="store_true", help="Build and save FAISS index"
     )
+    build_parser.add_argument("--engine", required=True)
 
     # QUERY
     query_parser = subparsers.add_parser("query")
@@ -87,6 +84,7 @@ def build_argparser():
     query_parser.add_argument("-e", "--embeddings", required=True)
     query_parser.add_argument("-i", "--index", required=True)
     query_parser.add_argument("-k", type=int, default=20)
+    query_parser.add_argument("--engine", required=True)
 
     return parser
 
@@ -111,12 +109,8 @@ def build(args: argparse.Namespace) -> None:
         lexicon = load_lexicon(source_path)
         logger.info(f"Loaded {len(lexicon)} words")
 
-        model = SentenceTransformer(MODEL_NAME)
-        embeddings: np.ndarray = model.encode(
-            [f"passage: {w}" for w in lexicon],
-            convert_to_numpy=True,
-            show_progress_bar=True,
-        ).astype("float32")
+        engine = load_engine(args.engine)
+        embeddings = engine.encode_passages(lexicon).astype("float32")
         np.savez(
             embeddings_path, words=np.array(lexicon), embeddings=embeddings
         )
@@ -134,14 +128,14 @@ def build(args: argparse.Namespace) -> None:
 
 
 def query(args: argparse.Namespace) -> None:
-    model = SentenceTransformer(MODEL_NAME)
+    engine = load_engine(args.engine)
     embeddings_path = Path(args.embeddings)
-    words, embeddings = load_embeddings(embeddings_path)
+    words, _ = load_embeddings(embeddings_path)
     index_path = Path(args.index)
 
     logger.info(f"Loading FAISS index from {index_path}")
     index = load_faiss_index(index_path)
-    scores, indices = query_index(args.query, index, model, args.k)
+    scores, indices = query_index(args.query, index, engine, args.k)
 
     logger.info("Most similar words:")
     for score, idx in zip(scores, indices):
