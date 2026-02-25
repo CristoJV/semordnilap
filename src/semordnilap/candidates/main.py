@@ -7,6 +7,12 @@ from pathlib import Path
 
 from tqdm import tqdm
 
+from semordnilap.candidates.filtering.rules import (
+    apply_filters,
+    reject_dotted,
+    reject_hyphenated,
+    reject_non_alphanumeric,
+)
 from semordnilap.lang.agreements import get_agreement_rules
 from semordnilap.lang.tagset import get_pos_feature_slots
 
@@ -21,6 +27,23 @@ logger = logging.getLogger(__name__)
 def load_lexicon(path: str):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def build_tag_index_from_word_subset(lexicon, allowed_words):
+    index = defaultdict(set)
+
+    for form in tqdm(
+        allowed_words,
+        total=len(lexicon),
+        desc="Building tag index from lexicon",
+    ):
+        analyses = lexicon.get(form, [])
+        for entry in analyses:
+            tag = entry.get("tag")
+            if not tag:
+                continue
+            index[tag].add(form)
+    return index
 
 
 def expand_pattern_from_lexicon(tag_index, pattern: str):
@@ -142,22 +165,6 @@ def parse_tag(tag: str) -> dict:
     return feats
 
 
-def build_tag_index(lexicon):
-    index = defaultdict(set)
-
-    for form, analyses in tqdm(
-        lexicon.items(),
-        total=len(lexicon),
-        desc="Building tag index from lexicon",
-    ):
-        for entry in analyses:
-            tag = entry.get("tag")
-            if not tag:
-                continue
-            index[tag].add(form)
-    return index
-
-
 def generate_candidates(tag_index, pattern):
     buckets = []
     for tag in pattern:
@@ -172,23 +179,77 @@ def generate_candidates(tag_index, pattern):
     return [" ".join(candidate) for candidate in raw_candidates]
 
 
+def export_candidates(out_filepath: str, candidates: list[str]):
+    with open(out_filepath, "w", encoding="utf-8") as f:
+        for candidate in candidates:
+            f.write(f"{candidate}\n")
+
+
 def build_parser():
     parser = argparse.ArgumentParser("Pattern generator (tag-based)")
     parser.add_argument("-l", "--lexicon", help="Lexicon JSON filepath")
     parser.add_argument("-o", "--out", help="Output filepath")
-    parser.add_argument("-p", "--pattern", nargs="+", help="Tag pattern")
     parser.add_argument(
         "--lang",
         required=True,
         help="Language (es, gl, spa, galician...)",
     )
+    parser.add_argument(
+        "-p",
+        "--pattern",
+        required=False,
+        help="Comma separated tag patterns (e.g. DAXXX, NCSXX)",
+    )
+    parser.add_argument(
+        "--words-only",
+        action="store_true",
+        help="Return only the filtered word list (skip pattern expansion)",
+    )
+    parser.add_argument(
+        "--filter",
+        action="store_true",
+        help="Apply form filters to the lexicon before canditate generation",
+    )
     return parser
 
 
-def export_candidates(out_filepath: str, candidates: list[str]):
-    with open(out_filepath, "w", encoding="utf-8") as f:
-        for candidate in candidates:
-            f.write(f"{candidate}\n")
+def parse_patterns(pattern_arg: str | None, tag_index):
+    if not pattern_arg:
+        logger.info("No pattern provided → using full tagset")
+        return [list(tag_index.keys())]
+
+    raw_patterns = [p.strip() for p in pattern_arg.split(",") if p.strip()]
+
+    logger.info("Patterns: %s", raw_patterns)
+
+    return raw_patterns
+
+
+def build_output_path(base_path: str | Path, new_suffix: str) -> Path:
+    base = Path(base_path)
+    return base.with_suffix(new_suffix)
+
+
+def export_filtering_artifacts(
+    out_path: Path, removed: dict, total_lexicon: int
+):
+    if not removed:
+        return
+    removed_path = build_output_path(out_path, ".removed.json")
+
+    with open(removed_path, "w", encoding="utf-8") as f:
+        json.dump(removed, f, indent=2, ensure_ascii=False)
+
+    removed_set = set()
+
+    for values in removed.values():
+        removed_set |= set(values)
+
+    auto_filter_path = build_output_path(out_path, ".automatic.filter")
+
+    with open(auto_filter_path, "w", encoding="utf-8") as f:
+        for word in sorted(removed_set):
+            f.write(f"{word}\n")
 
 
 def main():
@@ -201,16 +262,67 @@ def main():
     AGREEMENT_RULES = get_agreement_rules(args.lang)
 
     lexicon = load_lexicon(args.lexicon)
-    tag_index = build_tag_index(lexicon)
 
-    expanded_lists = [
-        expand_pattern_from_lexicon(tag_index, p) for p in args.pattern
-    ]
-    expanded = [list(combo) for combo in product(*expanded_lists)]
-    print(expanded)
-    agreeable = filter_agreable_patterns(expanded)
-    print(agreeable)
+    if args.filter:
+        logger.info("Applying from filters")
+
+        valid_words, removed = apply_filters(
+            lexicon,
+            form_rules=[
+                reject_hyphenated,
+                reject_dotted,
+                reject_non_alphanumeric,
+            ],
+        )
+        logger.info(
+            "Valid words: %d/%d - Removed: %d",
+            len(valid_words),
+            len(lexicon),
+            len(lexicon) - len(valid_words),
+        )
+        export_filtering_artifacts(
+            args.out, removed, total_lexicon=len(lexicon)
+        )
+    else:
+        valid_words = list(lexicon.keys())
+        removed = {}
+
+    # ---------------------------------------------------------
+    # Words-only shortcut
+    # ---------------------------------------------------------
+    if args.words_only:
+        logger.info("words-only mode. Skipping tag/pattern generation")
+
+        export_candidates(args.out, valid_words)
+
+        logger.info(
+            "Exported %d words to %s",
+            len(valid_words),
+            args.out,
+        )
+        return
+    # ---------------------------------------------------------
+    # Tag index
+    # ---------------------------------------------------------
+    tag_index = build_tag_index_from_word_subset(lexicon, valid_words)
+
+    # ---------------------------------------------------------
+    # Pattern handling
+    # ---------------------------------------------------------
+
+    if args.pattern:
+        raw_patterns = parse_patterns(args.pattern, tag_index)
+        logger.info("Using patterns: %s", raw_patterns)
+        expanded_lists = [
+            expand_pattern_from_lexicon(tag_index, p) for p in raw_patterns
+        ]
+        expanded = [list(combo) for combo in product(*expanded_lists)]
+    else:
+        logger.info("No pattern. Using all words directly")
+        expanded = [[tag] for tag in tag_index.keys()]
+
     candidates = []
+    agreeable = filter_agreable_patterns(expanded)
     for pat in agreeable:
         candidates.extend(generate_candidates(tag_index, pat))
     candidates_filepath = Path(args.out)
