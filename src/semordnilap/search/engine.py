@@ -37,7 +37,9 @@ def normalize_word(word: str):
     )
     word = unicodedata.normalize("NFD", word)
     word = "".join(c for c in word if c not in remove_unicode_marks)
-    return unicodedata.normalize("NFC", word)
+    norm_word = unicodedata.normalize("NFC", word)
+    # Remove spaces
+    return norm_word.replace(" ", "")
 
 
 def decompositions_candidates(
