@@ -7,11 +7,44 @@ from semordnilap.utils.text import strip_accents
 
 
 ONE_LETTER_WHITELIST = {
+    "en": {"a", "i"},
     "es": {"a", "e", "o", "y"},
+    "fr": {"a", "à", "y"},
+    "gl": {"a", "e", "o"},
     "pt": {"a", "e", "o"},
 }
 
 STOPWORDS = {
+    "en": {
+        "a",
+        "an",
+        "and",
+        "as",
+        "at",
+        "be",
+        "but",
+        "by",
+        "for",
+        "from",
+        "he",
+        "her",
+        "his",
+        "i",
+        "in",
+        "is",
+        "it",
+        "of",
+        "on",
+        "or",
+        "she",
+        "that",
+        "the",
+        "to",
+        "was",
+        "we",
+        "with",
+        "you",
+    },
     "es": {
         "a",
         "al",
@@ -33,7 +66,69 @@ STOPWORDS = {
         "sus",
         "un",
         "una",
+            "y",
+    },
+    "fr": {
+        "à",
+        "au",
+        "aux",
+        "avec",
+        "ce",
+        "ces",
+        "dans",
+        "de",
+        "des",
+        "du",
+        "elle",
+        "en",
+        "et",
+        "il",
+        "je",
+        "la",
+        "le",
+        "les",
+        "mais",
+        "ne",
+        "nous",
+        "ou",
+        "par",
+        "pas",
+        "pour",
+        "que",
+        "qui",
+        "se",
+        "sur",
+        "un",
+        "une",
+        "vous",
         "y",
+    },
+    "gl": {
+        "a",
+        "ao",
+        "as",
+        "co",
+        "coa",
+        "con",
+        "da",
+        "das",
+        "de",
+        "do",
+        "dos",
+        "e",
+        "en",
+        "na",
+        "nas",
+        "no",
+        "nos",
+        "o",
+        "os",
+        "ou",
+        "por",
+        "que",
+        "se",
+        "un",
+        "unha",
     },
     "pt": {
         "a",
@@ -75,7 +170,9 @@ def is_valid_token(
 
 def is_all_stopwords(tokens: tuple[str, ...], lang: str) -> bool:
     stopwords = STOPWORDS.get(lang, set())
-    return bool(tokens) and all(strip_accents(token) in stopwords for token in tokens)
+    return bool(tokens) and all(
+        strip_accents(token) in stopwords for token in tokens
+    )
 
 
 def is_valid_ngram(
@@ -106,4 +203,3 @@ def is_valid_ngram(
     if not include_all_stopword_ngrams and is_all_stopwords(tokens, lang):
         return False
     return True
-

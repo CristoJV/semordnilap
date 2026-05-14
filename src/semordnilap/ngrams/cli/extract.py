@@ -14,7 +14,6 @@ from semordnilap.ngrams.application import (
 from semordnilap.ngrams.domain import NgramExtractionPolicy
 from semordnilap.ngrams.infrastructure import DuckDbNgramCountRepository
 
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -36,7 +35,14 @@ def build_argparser() -> argparse.ArgumentParser:
         default=DEFAULT_DB_PATH,
         help=f"DuckDB database path. Default: {DEFAULT_DB_PATH}",
     )
-    parser.add_argument("--lang", required=True, choices=["es", "pt"])
+    parser.add_argument(
+        "--lang",
+        required=True,
+        help=(
+            "Language code stored with the extracted n-grams. Known codes "
+            "get language-specific filters; unknown codes use generic rules."
+        ),
+    )
     parser.add_argument(
         "--corpus",
         default="default",
@@ -167,6 +173,9 @@ def build_argparser() -> argparse.ArgumentParser:
 
 
 def command_from_args(args: argparse.Namespace) -> ExtractNgramsCommand:
+    args.lang = args.lang.strip().lower()
+    if not args.lang:
+        raise ValueError("--lang cannot be empty")
     if args.max_n < 1:
         raise ValueError("--max-n must be at least 1")
     if args.max_n > 3:
@@ -198,9 +207,10 @@ def command_from_args(args: argparse.Namespace) -> ExtractNgramsCommand:
         raise ValueError(
             "--out is required unless --stats-only or --compact-only is used"
         )
-    if not (
-        args.export_only or args.stats_only or args.compact_only
-    ) and args.input is None:
+    if (
+        not (args.export_only or args.stats_only or args.compact_only)
+        and args.input is None
+    ):
         raise ValueError(
             "--input is required unless --export-only, --compact-only, "
             "or --stats-only is used"

@@ -9,6 +9,7 @@ from semordnilap.ngrams.application import (
     run_extraction,
 )
 from semordnilap.ngrams.domain import NgramExtractionPolicy
+from semordnilap.ngrams.domain.filters import is_all_stopwords
 from semordnilap.ngrams.domain.normalize import normalize_ngram
 from semordnilap.ngrams.domain.tokenize import (
     iter_sentence_chunks,
@@ -106,6 +107,33 @@ def test_tokenization_ignores_urls_and_markers():
     tokenized = [tokenize_sentence(chunk) for chunk in chunks]
 
     assert tokenized == [["a", "casa"], ["o", "caminho"]]
+
+
+def test_extraction_supports_english_french_and_galician():
+    examples = [
+        ("en", "I saw a house.", ("i", "saw")),
+        ("fr", "Il va à Paris.", ("va", "à")),
+        ("gl", "A casa e o camiño.", ("casa", "e")),
+    ]
+
+    for lang, text, expected in examples:
+        counts = extract_counts_for_lang(text, lang)
+        assert expected in counts
+
+
+def extract_counts_for_lang(text, lang):
+    from semordnilap.ngrams.domain import extract_counts_from_text
+
+    return extract_counts_from_text(
+        text,
+        NgramExtractionPolicy(lang=lang, max_n=2),
+    )
+
+
+def test_stopword_filters_include_new_languages():
+    assert is_all_stopwords(("the", "and"), "en")
+    assert is_all_stopwords(("de", "la"), "fr")
+    assert is_all_stopwords(("de", "a"), "gl")
 
 
 def test_iter_texts_accepts_corpus_directory(tmp_path):

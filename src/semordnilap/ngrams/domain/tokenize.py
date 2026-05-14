@@ -1,4 +1,4 @@
-"""Lightweight corpus tokenization for Spanish and Portuguese."""
+"""Lightweight corpus tokenization for Latin-script corpora."""
 
 from __future__ import annotations
 
@@ -35,4 +35,3 @@ def tokenize_sentence(sentence: str) -> list[str]:
         if is_letter_token(token):
             tokens.append(token)
     return tokens
-
