@@ -412,7 +412,13 @@ class DuckDbNgramCountRepository:
             [lang, corpus],
         ).fetchone()[0]
 
-    def stats(self, *, lang: str | None = None, corpus: str | None = None):
+    def stats(
+        self,
+        *,
+        lang: str | None = None,
+        corpus: str | None = None,
+        include_top_rows: bool = False,
+    ):
         where = []
         params = []
         if lang:
@@ -459,16 +465,18 @@ class DuckDbNgramCountRepository:
             params,
         ).fetchall()
 
-        top_partial_rows = self._con.execute(
-            f"""
-            SELECT lang, corpus, text, n, count, norm_key
-            FROM ngram_counts
-            {where_clause}
-            ORDER BY count DESC
-            LIMIT 20
-            """,
-            params,
-        ).fetchall()
+        top_partial_rows = []
+        if include_top_rows:
+            top_partial_rows = self._con.execute(
+                f"""
+                SELECT lang, corpus, text, n, count, norm_key
+                FROM ngram_counts
+                {where_clause}
+                ORDER BY count DESC
+                LIMIT 20
+                """,
+                params,
+            ).fetchall()
 
         totals_by_n = self._con.execute(
             f"""
@@ -500,12 +508,32 @@ class DuckDbNgramCountRepository:
             """,
         ).fetchall()
 
+        filtered_table_counts = self._con.execute(
+            f"""
+            SELECT 'ngram_counts' AS table_name, COUNT(*) AS rows
+            FROM ngram_counts
+            {where_clause}
+            UNION ALL
+            SELECT 'ngram_totals' AS table_name, COUNT(*) AS rows
+            FROM ngram_totals
+            {where_clause}
+            UNION ALL
+            SELECT 'ngram_compactions' AS table_name, COUNT(*) AS rows
+            FROM ngram_compactions
+            {where_clause}
+            ORDER BY table_name
+            """,
+            [*params, *params, *params],
+        ).fetchall()
+
         compacted = self._con.execute(
-            """
+            f"""
             SELECT lang, corpus, n, compacted_at
             FROM ngram_compactions
+            {where_clause}
             ORDER BY compacted_at DESC
             """,
+            params,
         ).fetchall()
 
         return {
@@ -513,17 +541,41 @@ class DuckDbNgramCountRepository:
             "by_n": by_n,
             "totals_by_n": totals_by_n,
             "table_counts": table_counts,
+            "filtered_table_counts": filtered_table_counts,
             "top_partial_rows": top_partial_rows,
             "compacted": compacted,
         }
 
-    def reset_counts(self, *, lang: str, corpus: str) -> None:
-        existing = self.count_entries(lang=lang, corpus=corpus)
+    def _count_table_rows(self, table: str, *, lang: str, corpus: str) -> int:
+        return self._con.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM {table}
+            WHERE lang = ? AND corpus = ?
+            """,
+            [lang, corpus],
+        ).fetchone()[0]
+
+    def delete_counts(self, *, lang: str, corpus: str) -> dict[str, int]:
+        deleted = {
+            RAW_COUNTS_TABLE: self._count_table_rows(
+                RAW_COUNTS_TABLE, lang=lang, corpus=corpus
+            ),
+            TOTAL_COUNTS_TABLE: self._count_table_rows(
+                TOTAL_COUNTS_TABLE, lang=lang, corpus=corpus
+            ),
+            "ngram_compactions": self._count_table_rows(
+                "ngram_compactions", lang=lang, corpus=corpus
+            ),
+        }
         logger.info(
-            "Resetting %d existing raw rows for lang=%s corpus=%s",
-            existing,
+            "Deleting n-gram rows for lang=%s corpus=%s: raw=%d totals=%d "
+            "compactions=%d",
             lang,
             corpus,
+            deleted[RAW_COUNTS_TABLE],
+            deleted[TOTAL_COUNTS_TABLE],
+            deleted["ngram_compactions"],
         )
         self._con.execute(
             """
@@ -546,6 +598,10 @@ class DuckDbNgramCountRepository:
             """,
             [lang, corpus],
         )
+        return deleted
+
+    def reset_counts(self, *, lang: str, corpus: str) -> dict[str, int]:
+        return self.delete_counts(lang=lang, corpus=corpus)
 
     def close(self) -> None:
         logger.info("Closing DuckDB database")

@@ -75,30 +75,36 @@ n-gram extractor.
 ### 2. N-Grams
 
 Extract unigrams, bigrams, and trigrams from a corpus, store counts in DuckDB,
-compact totals, and export a TSV sample.
+and compact totals. Extraction and TSV export are separate steps.
 
 ```bash
-uv run sp_ngrams \
+uv run sp_ngrams extract \
   --input data/corpus/wikisource/wikisource_es_20231201.jsonl \
   --lang es \
   --corpus wikisource_20231201 \
   --db-path data/ngrams/counts.duckdb \
-  --out data/ngrams/es.tsv \
-  --format jsonl \
-  --min-count 5 \
-  --max-results 100000
+  --format jsonl
 ```
 
 Repeat for the target language:
 
 ```bash
-uv run sp_ngrams \
+uv run sp_ngrams extract \
   --input data/corpus/wikisource/wikisource_pt_20231201.jsonl \
   --lang pt \
   --corpus wikisource_20231201 \
   --db-path data/ngrams/counts.duckdb \
-  --out data/ngrams/pt.tsv \
-  --format jsonl \
+  --format jsonl
+```
+
+Export a TSV view only when you need one for inspection or downstream tools:
+
+```bash
+uv run sp_ngrams export \
+  --lang es \
+  --corpus wikisource_20231201 \
+  --db-path data/ngrams/counts.duckdb \
+  --out data/ngrams/es.tsv \
   --min-count 5 \
   --max-results 100000
 ```
@@ -109,11 +115,26 @@ compacts progressively after extraction.
 You can inspect storage statistics with:
 
 ```bash
-uv run sp_ngrams \
+uv run sp_ngrams db stats \
   --db-path data/ngrams/counts.duckdb \
   --lang es \
-  --corpus wikisource_20231201 \
-  --stats-only
+  --corpus wikisource_20231201
+```
+
+You can also maintain the database directly:
+
+```bash
+uv run sp_ngrams db delete \
+  --db-path data/ngrams/counts.duckdb \
+  --lang en \
+  --corpus wikisource_20231201
+```
+
+```bash
+uv run sp_ngrams db compact \
+  --db-path data/ngrams/counts.duckdb \
+  --lang es \
+  --corpus wikisource_20231201
 ```
 
 ### 3. Search
@@ -218,21 +239,19 @@ uv run sp_corpus_wikisource \
   --out-dir data/corpus/wikisource
 
 # 2. Extract source n-grams
-uv run sp_ngrams \
+uv run sp_ngrams extract \
   --input data/corpus/wikisource/wikisource_es_20231201.jsonl \
   --lang es \
   --corpus wikisource_20231201 \
   --db-path data/ngrams/counts.duckdb \
-  --out data/ngrams/es.tsv \
   --format jsonl
 
 # 3. Extract target n-grams
-uv run sp_ngrams \
+uv run sp_ngrams extract \
   --input data/corpus/wikisource/wikisource_pt_20231201.jsonl \
   --lang pt \
   --corpus wikisource_20231201 \
   --db-path data/ngrams/counts.duckdb \
-  --out data/ngrams/pt.tsv \
   --format jsonl
 
 # 4. Search bilingual semordnilaps

@@ -27,6 +27,8 @@ class ExtractNgramsCommand:
     flush_unique_ngrams: int
     reset: bool
     export_only: bool
+    export_after_count: bool
+    delete_only: bool
     compact_only: bool
     compact_n: int
     compact_after_count: bool

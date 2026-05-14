@@ -1,6 +1,8 @@
 import csv
 from collections import Counter
+from dataclasses import replace
 
+from semordnilap.ngrams.cli.extract import build_argparser, command_from_args
 from semordnilap.ngrams.application import (
     ExtractNgramsCommand,
     count_corpus,
@@ -38,6 +40,8 @@ def build_options(corpus, output, lang):
         flush_unique_ngrams=250_000,
         reset=False,
         export_only=False,
+        export_after_count=True,
+        delete_only=False,
         compact_only=False,
         compact_n=0,
         compact_after_count=True,
@@ -145,6 +149,67 @@ def test_iter_texts_accepts_corpus_directory(tmp_path):
     assert list(iter_texts(tmp_path, "txt")) == ["uno\n", "dos\n"]
 
 
+def test_extract_subcommand_counts_without_exporting():
+    args = build_argparser().parse_args(
+        [
+            "extract",
+            "--input",
+            "corpus.jsonl",
+            "--lang",
+            "ES",
+            "--corpus",
+            "wikisource",
+            "--format",
+            "jsonl",
+        ]
+    )
+
+    command = command_from_args(args)
+
+    assert command.policy.lang == "es"
+    assert command.input_path.name == "corpus.jsonl"
+    assert command.export_after_count is False
+    assert command.compact_after_count is True
+
+
+def test_export_subcommand_uses_existing_database_counts():
+    args = build_argparser().parse_args(
+        [
+            "export",
+            "--lang",
+            "es",
+            "--corpus",
+            "wikisource",
+            "--out",
+            "ngrams.tsv",
+        ]
+    )
+
+    command = command_from_args(args)
+
+    assert command.export_only is True
+    assert command.export_after_count is True
+    assert command.output_path.name == "ngrams.tsv"
+
+
+def test_db_delete_subcommand_targets_lang_corpus():
+    args = build_argparser().parse_args(
+        [
+            "db",
+            "delete",
+            "--lang",
+            "es",
+            "--corpus",
+            "wikisource",
+        ]
+    )
+
+    command = command_from_args(args)
+
+    assert command.delete_only is True
+    assert command.corpus == "wikisource"
+
+
 def test_reset_recomputes_lang_corpus_counts(tmp_path):
     corpus = tmp_path / "corpus.txt"
     corpus.write_text("La casa\n", encoding="utf-8")
@@ -172,6 +237,8 @@ def test_reset_recomputes_lang_corpus_counts(tmp_path):
         flush_unique_ngrams=opts.flush_unique_ngrams,
         reset=True,
         export_only=opts.export_only,
+        export_after_count=opts.export_after_count,
+        delete_only=opts.delete_only,
         compact_only=opts.compact_only,
         compact_n=opts.compact_n,
         compact_after_count=opts.compact_after_count,
@@ -237,6 +304,8 @@ def test_export_tsv_respects_max_results(tmp_path):
         flush_unique_ngrams=250_000,
         reset=False,
         export_only=True,
+        export_after_count=True,
+        delete_only=False,
         compact_only=False,
         compact_n=0,
         compact_after_count=True,
@@ -287,6 +356,8 @@ def test_export_tsv_can_filter_by_n_and_norm_length(tmp_path):
         flush_unique_ngrams=250_000,
         reset=False,
         export_only=True,
+        export_after_count=True,
+        delete_only=False,
         compact_only=False,
         compact_n=0,
         compact_after_count=True,
@@ -339,6 +410,8 @@ def test_compacted_counts_can_be_used_for_export(tmp_path):
         flush_unique_ngrams=250_000,
         reset=False,
         export_only=True,
+        export_after_count=True,
+        delete_only=False,
         compact_only=False,
         compact_n=0,
         compact_after_count=True,
@@ -381,6 +454,77 @@ def test_adding_raw_counts_invalidates_stale_compaction(tmp_path):
     assert stats["totals_by_n"] == []
     assert rows[0].text == "casa"
     assert rows[0].count == 5
+
+
+def test_delete_only_removes_lang_corpus_storage(tmp_path):
+    db_path = tmp_path / "ngrams.duckdb"
+    repository = DuckDbNgramCountRepository(db_path)
+    repository.add_counts(
+        Counter({("casa",): 2}),
+        lang="es",
+        corpus="test",
+        fold_nasal_letters=False,
+    )
+    repository.compact_counts(lang="es", corpus="test", n=1)
+    repository.add_counts(
+        Counter({("house",): 4}),
+        lang="en",
+        corpus="test",
+        fold_nasal_letters=False,
+    )
+    repository.close()
+
+    opts = replace(
+        build_options(tmp_path / "unused.txt", tmp_path / "unused.tsv", "es"),
+        delete_only=True,
+    )
+    deleted = run_extraction(opts, DuckDbNgramCountRepository(db_path))
+
+    repository = DuckDbNgramCountRepository(db_path)
+    es_stats = repository.stats(lang="es", corpus="test")
+    en_rows = list(
+        repository.iter_counts(lang="en", corpus="test", min_count=1)
+    )
+    repository.close()
+
+    assert deleted == 3
+    assert es_stats["by_lang_corpus"] == []
+    assert es_stats["totals_by_n"] == []
+    assert es_stats["compacted"] == []
+    assert len(en_rows) == 1
+    assert en_rows[0].text == "house"
+
+
+def test_stats_include_filtered_table_counts(tmp_path):
+    db_path = tmp_path / "ngrams.duckdb"
+    repository = DuckDbNgramCountRepository(db_path)
+    repository.add_counts(
+        Counter({("casa",): 2}),
+        lang="es",
+        corpus="test",
+        fold_nasal_letters=False,
+    )
+    repository.compact_counts(lang="es", corpus="test", n=1)
+    repository.add_counts(
+        Counter({("house",): 4}),
+        lang="en",
+        corpus="test",
+        fold_nasal_letters=False,
+    )
+
+    stats = repository.stats(lang="fr", corpus="test")
+    global_counts = dict(repository.stats()["table_counts"])
+    filtered_counts = dict(stats["filtered_table_counts"])
+    repository.close()
+
+    assert filtered_counts == {
+        "ngram_compactions": 0,
+        "ngram_counts": 0,
+        "ngram_totals": 0,
+    }
+    assert global_counts["ngram_counts"] == 2
+    assert global_counts["ngram_totals"] == 1
+    assert global_counts["ngram_compactions"] == 1
 
 
 def test_export_auto_uses_complete_compaction_for_all_n(tmp_path):
@@ -455,6 +599,8 @@ def test_compact_all_counts_runs_progressively(tmp_path):
         flush_unique_ngrams=250_000,
         reset=False,
         export_only=False,
+        export_after_count=False,
+        delete_only=False,
         compact_only=True,
         compact_n=0,
         compact_after_count=True,

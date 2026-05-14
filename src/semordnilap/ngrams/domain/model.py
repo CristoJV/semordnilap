@@ -74,7 +74,10 @@ class NgramCountRepository(Protocol):
     def compact_counts(self, *, lang: str, corpus: str, n: int) -> int:
         raise NotImplementedError
 
-    def reset_counts(self, *, lang: str, corpus: str) -> None:
+    def delete_counts(self, *, lang: str, corpus: str) -> dict[str, int]:
+        raise NotImplementedError
+
+    def reset_counts(self, *, lang: str, corpus: str) -> dict[str, int]:
         raise NotImplementedError
 
     def close(self) -> None:

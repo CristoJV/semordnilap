@@ -246,10 +246,29 @@ def compact_all_counts(
     return total
 
 
+def delete_counts(
+    command: ExtractNgramsCommand, repository: NgramCountRepository
+) -> int:
+    deleted = repository.delete_counts(
+        lang=command.policy.lang,
+        corpus=command.corpus,
+    )
+    total = sum(deleted.values())
+    logger.info(
+        "Deleted %d rows for lang=%s corpus=%s",
+        total,
+        command.policy.lang,
+        command.corpus,
+    )
+    return total
+
+
 def run_extraction(
     command: ExtractNgramsCommand, repository: NgramCountRepository
 ) -> int:
     try:
+        if command.delete_only:
+            return delete_counts(command, repository)
         if command.compact_only:
             if command.compact_n:
                 return compact_counts(command, repository)
@@ -264,8 +283,9 @@ def run_extraction(
             )
         else:
             count_corpus(command, repository)
+            compacted = 0
             if command.compact_after_count:
-                compact_all_counts(command, repository)
+                compacted = compact_all_counts(command, repository)
                 if command.export_source == "auto":
                     export_source_override = "compact"
             else:
@@ -275,6 +295,13 @@ def run_extraction(
                     command.policy.lang,
                     command.corpus,
                 )
+            if not command.export_after_count:
+                logger.info(
+                    "Skipping TSV export after extraction for lang=%s corpus=%s",
+                    command.policy.lang,
+                    command.corpus,
+                )
+                return compacted
         return export_tsv(
             command,
             repository,
