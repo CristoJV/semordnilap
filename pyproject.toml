@@ -5,8 +5,11 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "datasets>=4.8.5",
     "dearpygui>=2.1.1",
+    "duckdb>=1.5.2",
     "faiss-cpu>=1.13.2",
+    "gradio>=6.14.0",
     "numpy>=2.4.2",
     "sentence-transformers>=5.2.2",
     "tqdm>=4.67.1",
@@ -19,6 +22,10 @@ sp_dict = "semordnilap.extract.main:main"
 sp_cand = "semordnilap.candidates.main:main"
 sp_find = "semordnilap.search.engine:main"
 sp_app = "semordnilap.app.app:run"
+sp_corpus_wikisource = "semordnilap.corpus.wikisource:main"
+sp_ngrams = "semordnilap.ngrams.cli.extract:main"
+sp_search_ngrams = "semordnilap.search.cli.find_ngrams:main"
+sp_review = "semordnilap.review.cli.gradio_app:main"
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]

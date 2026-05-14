@@ -3,7 +3,6 @@ import argparse
 import json
 import logging
 import sys
-import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import product
@@ -12,6 +11,7 @@ from tqdm import tqdm
 from wordfreq import zipf_frequency
 
 from semordnilap.load import load_lexicon
+from semordnilap.utils.text import normalize_compact_text
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,19 +27,7 @@ def filter_common_words(
 
 
 def normalize_word(word: str):
-    remove_unicode_marks = set(
-        [
-            "\u0301",  # acute  ´
-            "\u0300",  # grave  `
-            "\u0302",  # circumflex ^
-            "\u0308",  # diaeresis ¨
-        ]
-    )
-    word = unicodedata.normalize("NFD", word)
-    word = "".join(c for c in word if c not in remove_unicode_marks)
-    norm_word = unicodedata.normalize("NFC", word)
-    # Remove spaces
-    return norm_word.replace(" ", "")
+    return normalize_compact_text(word)
 
 
 def decompositions_candidates(
