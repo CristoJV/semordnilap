@@ -1,6 +1,8 @@
 import csv
-import pytest
 from collections import Counter
+
+import duckdb
+import pytest
 
 from semordnilap.ngrams.infrastructure import DuckDbNgramCountRepository
 from semordnilap.scoring import score_semordnilap_pair
@@ -55,6 +57,91 @@ def test_search_ngrams_finds_reversed_norm_key_pairs(tmp_path):
     assert pairs[0].source_norm_key == "roda"
     assert pairs[0].target_text == "a dor"
     assert pairs[0].target_norm_key == "ador"
+    assert pairs[0].source_has_punctuation is False
+    assert pairs[0].target_has_punctuation is False
+
+
+def test_search_ngrams_exposes_punctuation_for_each_side(tmp_path):
+    db_path = tmp_path / "ngrams.duckdb"
+    add_counts(db_path, lang="es", corpus="wiki", counts={("roda,",): 5})
+    add_counts(db_path, lang="pt", corpus="wiki", counts={("a", "dor"): 7})
+
+    repository = DuckDbSemordnilapSearchRepository(db_path)
+    pairs = list(
+        repository.iter_pairs(
+            SearchPolicy(
+                source_lang="es",
+                target_lang="pt",
+                source_corpus="wiki",
+                target_corpus="wiki",
+                min_source_count=1,
+                min_target_count=1,
+            )
+        )
+    )
+    repository.close()
+
+    assert len(pairs) == 1
+    assert pairs[0].source_text == "roda,"
+    assert pairs[0].source_has_punctuation is True
+    assert pairs[0].target_has_punctuation is False
+
+
+def test_search_ngrams_supports_legacy_tables_without_punctuation_column(
+    tmp_path,
+):
+    db_path = tmp_path / "legacy.duckdb"
+    connection = duckdb.connect(str(db_path))
+    for table in ("ngram_counts", "ngram_totals"):
+        connection.execute(
+            f"""
+            CREATE TABLE {table} (
+                lang TEXT,
+                corpus TEXT,
+                text TEXT,
+                n INTEGER,
+                count BIGINT,
+                norm_key TEXT
+            )
+            """
+        )
+    connection.execute(
+        """
+        CREATE TABLE ngram_compactions (
+            lang TEXT,
+            corpus TEXT,
+            n INTEGER,
+            compacted_at TIMESTAMP
+        )
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO ngram_counts VALUES
+            ('es', 'wiki', 'roda', 1, 5, 'roda'),
+            ('pt', 'wiki', 'a dor', 2, 7, 'ador')
+        """
+    )
+    connection.close()
+
+    repository = DuckDbSemordnilapSearchRepository(db_path)
+    pairs = list(
+        repository.iter_pairs(
+            SearchPolicy(
+                source_lang="es",
+                target_lang="pt",
+                source_corpus="wiki",
+                target_corpus="wiki",
+                min_source_count=1,
+                min_target_count=1,
+            )
+        )
+    )
+    repository.close()
+
+    assert len(pairs) == 1
+    assert pairs[0].source_has_punctuation is False
+    assert pairs[0].target_has_punctuation is False
 
 
 def test_search_ngrams_aggregates_partial_counts(tmp_path):

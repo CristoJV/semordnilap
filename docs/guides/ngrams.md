@@ -61,6 +61,10 @@ Extraction applies token and normalized-key filters before counting:
 - `--min-norm-len` removes very short normalized forms.
 - `--include-all-stopword-ngrams` keeps n-grams made only of stopwords.
 - `--fold-nasal-letters` normalizes `ñ` to `n`; `ç` is always normalized to `c`.
+- `--keep-punctuation` (also `--no-omit-punctuation`) allows n-grams to
+  cross punctuation. Punctuation remains in `text`, does not count toward
+  `n`, and is removed from `norm_key`. By default every punctuation character
+  is an n-gram boundary (`--omit-punctuation`).
 
 Known language codes get language-specific filters. Unknown codes fall back to
 generic rules.
@@ -76,6 +80,7 @@ erDiagram
         int n
         int count
         string norm_key
+        boolean has_punctuation
     }
     ngram_totals {
         string lang
@@ -84,6 +89,7 @@ erDiagram
         int n
         int count
         string norm_key
+        boolean has_punctuation
     }
     ngram_compactions {
         string lang
@@ -94,9 +100,9 @@ erDiagram
 ```
 
 `ngram_counts` stores raw partial flushes. `ngram_totals` stores compacted
-counts grouped by language, corpus, text, n, and normalized key. Search and
-export can use either raw or compacted counts, but compacted totals are usually
-faster and easier to reason about.
+counts grouped by language, corpus, text, n, normalized key, and punctuation
+indicator. Search and export can use either raw or compacted counts, but
+compacted totals are usually faster and easier to reason about.
 
 ## Compact Counts
 
@@ -158,4 +164,3 @@ uv run sp_ngrams export \
 
 `--export-source auto` uses compacted totals when available and raw counts
 otherwise. Use `compact` when you want to fail if totals are missing.
-

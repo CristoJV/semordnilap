@@ -68,6 +68,27 @@ def add_policy_options(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Normalize ñ to n. ç is always normalized to c.",
     )
+    punctuation_group = parser.add_mutually_exclusive_group()
+    punctuation_group.add_argument(
+        "--omit-punctuation",
+        dest="omit_punctuation",
+        action="store_true",
+        default=True,
+        help=(
+            "Treat every punctuation character as an n-gram boundary "
+            "(default)."
+        ),
+    )
+    punctuation_group.add_argument(
+        "--keep-punctuation",
+        "--no-omit-punctuation",
+        dest="omit_punctuation",
+        action="store_false",
+        help=(
+            "Allow n-grams to cross punctuation, retaining it in text while "
+            "excluding it from n and norm_key."
+        ),
+    )
 
 
 def add_counting_options(parser: argparse.ArgumentParser) -> None:
@@ -291,6 +312,7 @@ def policy_from_args(args: argparse.Namespace) -> NgramExtractionPolicy:
             args, "include_all_stopword_ngrams", False
         ),
         fold_nasal_letters=getattr(args, "fold_nasal_letters", False),
+        omit_punctuation=getattr(args, "omit_punctuation", True),
     )
 
 
@@ -463,6 +485,7 @@ def main(argv: list[str] | None = None) -> int:
         "max_results=%d export_n=%d export_norm_len=%d..%d "
         "export_source=%s export_log_every=%d "
         "chunk_docs=%d flush_unique_ngrams=%d "
+        "omit_punctuation=%s "
         "reset=%s export_only=%s export_after_count=%s delete_only=%s "
         "compact_only=%s compact_n=%d compact_after_count=%s",
         command.policy.lang,
@@ -477,6 +500,7 @@ def main(argv: list[str] | None = None) -> int:
         command.export_log_every,
         command.chunk_docs,
         command.flush_unique_ngrams,
+        command.policy.omit_punctuation,
         command.reset,
         command.export_only,
         command.export_after_count,

@@ -10,7 +10,12 @@ from semordnilap.ngrams.application import (
     compact_all_counts,
     run_extraction,
 )
-from semordnilap.ngrams.domain import NgramExtractionPolicy
+from semordnilap.ngrams.domain import (
+    ExtractedNgram,
+    NgramExtractionPolicy,
+    build_ngram_count,
+    extract_counts_from_text,
+)
 from semordnilap.ngrams.domain.filters import is_all_stopwords
 from semordnilap.ngrams.domain.normalize import normalize_ngram
 from semordnilap.ngrams.domain.tokenize import (
@@ -56,6 +61,52 @@ def test_sentence_chunks_do_not_cross_strong_punctuation():
     tokenized = [tokenize_sentence(chunk) for chunk in chunks]
 
     assert tokenized == [["la", "casa"], ["el", "camino"]]
+
+
+def test_sentence_chunks_split_on_every_punctuation_character():
+    text = "La niña, el perro—y la gata"
+
+    chunks = list(iter_sentence_chunks(text))
+    tokenized = [tokenize_sentence(chunk) for chunk in chunks]
+
+    assert tokenized == [["la", "niña"], ["el", "perro"], ["y", "la", "gata"]]
+
+
+def test_extraction_can_retain_punctuation_without_counting_it_as_a_token():
+    counts = extract_counts_from_text(
+        "La niña, el perro.",
+        NgramExtractionPolicy(
+            lang="es",
+            max_n=2,
+            omit_punctuation=False,
+        ),
+    )
+
+    assert counts[ExtractedNgram(("niña", "el"), "niña, el")] == 1
+    assert counts[ExtractedNgram(("niña",), "niña,")] == 1
+    assert counts[ExtractedNgram(("perro",), "perro.")] == 1
+
+    row = build_ngram_count(
+        ("niña,", "el"),
+        count=1,
+        lang="es",
+        corpus="test",
+        fold_nasal_letters=False,
+    )
+    assert row.text == "niña, el"
+    assert row.tokens == ("niña", "el")
+    assert row.n == 2
+    assert row.norm_key == "ninael"
+    assert row.has_punctuation is True
+
+
+def test_extraction_omits_punctuation_by_default():
+    counts = extract_counts_from_text(
+        "La niña, el perro.",
+        NgramExtractionPolicy(lang="es", max_n=2),
+    )
+
+    assert ("niña", "el") not in counts
 
 
 def collect_counts(opts, db_path):
@@ -170,6 +221,58 @@ def test_extract_subcommand_counts_without_exporting():
     assert command.input_path.name == "corpus.jsonl"
     assert command.export_after_count is False
     assert command.compact_after_count is True
+    assert command.policy.omit_punctuation is True
+
+
+def test_extract_subcommand_can_keep_punctuation():
+    args = build_argparser().parse_args(
+        [
+            "extract",
+            "--input",
+            "corpus.txt",
+            "--lang",
+            "es",
+            "--keep-punctuation",
+        ]
+    )
+
+    command = command_from_args(args)
+
+    assert command.policy.omit_punctuation is False
+
+
+def test_punctuation_metadata_is_persisted_and_exported(tmp_path):
+    corpus = tmp_path / "corpus.txt"
+    output = tmp_path / "ngrams.tsv"
+    corpus.write_text("La niña, el perro.\n", encoding="utf-8")
+    opts = replace(
+        build_options(corpus, output, "es"),
+        policy=NgramExtractionPolicy(
+            lang="es",
+            max_n=2,
+            omit_punctuation=False,
+        ),
+    )
+
+    repository = DuckDbNgramCountRepository(tmp_path / "ngrams.duckdb")
+    count_corpus(opts, repository)
+    rows = list(
+        repository.iter_counts(lang="es", corpus="test", min_count=1)
+    )
+    export_tsv(opts, repository)
+    repository.close()
+
+    punctuated = next(row for row in rows if row.text == "niña, el")
+    assert punctuated.has_punctuation is True
+    assert punctuated.n == 2
+    assert punctuated.norm_key == "ninael"
+
+    with output.open("r", encoding="utf-8", newline="") as f:
+        exported = list(csv.DictReader(f, delimiter="\t"))
+    exported_punctuated = next(
+        row for row in exported if row["text"] == "niña, el"
+    )
+    assert exported_punctuated["has_punctuation"] == "True"
 
 
 def test_export_subcommand_uses_existing_database_counts():

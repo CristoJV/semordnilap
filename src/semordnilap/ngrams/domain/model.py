@@ -11,6 +11,17 @@ from semordnilap.ngrams.domain.scoring import score_ngram
 
 
 @dataclass(frozen=True)
+class ExtractedNgram:
+    """Lexical tokens together with their punctuation-preserving surface."""
+
+    tokens: tuple[str, ...]
+    text: str
+
+
+NgramKey = tuple[str, ...] | ExtractedNgram
+
+
+@dataclass(frozen=True)
 class NgramExtractionPolicy:
     lang: str
     max_n: int = 3
@@ -19,6 +30,7 @@ class NgramExtractionPolicy:
     min_norm_len: int = 3
     include_all_stopword_ngrams: bool = False
     fold_nasal_letters: bool = False
+    omit_punctuation: bool = True
 
 
 @dataclass(frozen=True)
@@ -29,10 +41,14 @@ class NgramCount:
     n: int
     count: int
     norm_key: str
+    has_punctuation: bool = False
 
     @property
     def tokens(self) -> tuple[str, ...]:
-        return tuple(self.text.split())
+        # Stored text may retain punctuation, while tokens are always lexical.
+        from semordnilap.ngrams.domain.tokenize import tokenize_sentence
+
+        return tuple(tokenize_sentence(self.text))
 
     def score(self, policy: NgramExtractionPolicy) -> float:
         return score_ngram(
@@ -46,7 +62,7 @@ class NgramCount:
 class NgramCountRepository(Protocol):
     def add_counts(
         self,
-        counts: Counter[tuple[str, ...]],
+        counts: Counter[NgramKey],
         *,
         lang: str,
         corpus: str,

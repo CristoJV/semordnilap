@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from semordnilap.ngrams.application.commands import ExtractNgramsCommand
 from semordnilap.ngrams.domain import (
+    NgramKey,
     NgramCountRepository,
     extract_counts_from_text,
 )
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 def flush_counts(
     repository: NgramCountRepository,
-    counts: Counter[tuple[str, ...]],
+    counts: Counter[NgramKey],
     command: ExtractNgramsCommand,
 ) -> None:
     if not counts:
@@ -43,7 +44,7 @@ def flush_counts(
 def count_corpus(
     command: ExtractNgramsCommand, repository: NgramCountRepository
 ) -> None:
-    pending_counts: Counter[tuple[str, ...]] = Counter()
+    pending_counts: Counter[NgramKey] = Counter()
     docs_in_chunk = 0
 
     if command.reset:
@@ -128,6 +129,7 @@ def export_tsv(
                 "count",
                 "score",
                 "norm_key",
+                "has_punctuation",
             ],
             delimiter="\t",
         )
@@ -143,6 +145,7 @@ def export_tsv(
                     "count": row.count,
                     "score": row.score(command.policy),
                     "norm_key": row.norm_key,
+                    "has_punctuation": row.has_punctuation,
                 }
             )
             exported += 1

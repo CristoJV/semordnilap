@@ -24,12 +24,14 @@ def export_pairs_tsv(command: FindSemordnilapsCommand, repository) -> int:
                 "source_n",
                 "source_count",
                 "source_norm_key",
+                "source_has_punctuation",
                 "target_lang",
                 "target_corpus",
                 "target_text",
                 "target_n",
                 "target_count",
                 "target_norm_key",
+                "target_has_punctuation",
                 "pair_score",
             ],
             delimiter="\t",
@@ -45,12 +47,14 @@ def export_pairs_tsv(command: FindSemordnilapsCommand, repository) -> int:
                     "source_n": pair.source_n,
                     "source_count": pair.source_count,
                     "source_norm_key": pair.source_norm_key,
+                    "source_has_punctuation": pair.source_has_punctuation,
                     "target_lang": pair.target_lang,
                     "target_corpus": pair.target_corpus,
                     "target_text": pair.target_text,
                     "target_n": pair.target_n,
                     "target_count": pair.target_count,
                     "target_norm_key": pair.target_norm_key,
+                    "target_has_punctuation": pair.target_has_punctuation,
                     "pair_score": pair.pair_score,
                 }
             )
@@ -65,4 +69,3 @@ def run_search(command: FindSemordnilapsCommand, repository) -> int:
         return export_pairs_tsv(command, repository)
     finally:
         repository.close()
-

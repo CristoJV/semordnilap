@@ -33,12 +33,14 @@ class SemordnilapPair:
     source_n: int
     source_count: int
     source_norm_key: str
+    source_has_punctuation: bool
     target_lang: str
     target_corpus: str
     target_text: str
     target_n: int
     target_count: int
     target_norm_key: str
+    target_has_punctuation: bool
 
     @property
     def pair_score(self) -> float:

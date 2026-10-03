@@ -9,7 +9,12 @@ from collections import Counter
 from pathlib import Path
 from time import perf_counter
 
-from semordnilap.ngrams.domain import NgramCount, build_ngram_count
+from semordnilap.ngrams.domain import (
+    ExtractedNgram,
+    NgramCount,
+    NgramKey,
+    build_ngram_count,
+)
 
 logger = logging.getLogger(__name__)
 INSERT_BATCH_SIZE = 50_000
@@ -42,7 +47,8 @@ class DuckDbNgramCountRepository:
                 text TEXT NOT NULL,
                 n INTEGER NOT NULL,
                 count BIGINT NOT NULL,
-                norm_key TEXT NOT NULL
+                norm_key TEXT NOT NULL,
+                has_punctuation BOOLEAN NOT NULL DEFAULT false
             )
             """
         )
@@ -54,7 +60,8 @@ class DuckDbNgramCountRepository:
                 text TEXT NOT NULL,
                 n INTEGER NOT NULL,
                 count BIGINT NOT NULL,
-                norm_key TEXT NOT NULL
+                norm_key TEXT NOT NULL,
+                has_punctuation BOOLEAN NOT NULL DEFAULT false
             )
             """
         )
@@ -68,10 +75,26 @@ class DuckDbNgramCountRepository:
             )
             """
         )
+        # DuckDB rewrites an existing column to its default when ADD COLUMN IF
+        # NOT EXISTS is repeated, so inspect the schema before migrating.
+        for table in (RAW_COUNTS_TABLE, TOTAL_COUNTS_TABLE):
+            columns = {
+                row[1]
+                for row in self._con.execute(
+                    f"PRAGMA table_info('{table}')"
+                ).fetchall()
+            }
+            if "has_punctuation" not in columns:
+                self._con.execute(
+                    f"""
+                    ALTER TABLE {table}
+                    ADD COLUMN has_punctuation BOOLEAN DEFAULT false
+                    """
+                )
 
     def add_counts(
         self,
-        counts: Counter[tuple[str, ...]],
+        counts: Counter[NgramKey],
         *,
         lang: str,
         corpus: str,
@@ -91,9 +114,9 @@ class DuckDbNgramCountRepository:
 
         batch = []
         persisted = 0
-        for tokens, count in counts.items():
+        for ngram, count in counts.items():
             row = build_ngram_count(
-                tokens,
+                ngram,
                 count=count,
                 lang=lang,
                 corpus=corpus,
@@ -107,6 +130,7 @@ class DuckDbNgramCountRepository:
                     row.n,
                     row.count,
                     row.norm_key,
+                    row.has_punctuation,
                 )
             )
             if len(batch) >= INSERT_BATCH_SIZE:
@@ -123,7 +147,12 @@ class DuckDbNgramCountRepository:
         self._invalidate_compactions(
             lang=lang,
             corpus=corpus,
-            n_values={len(tokens) for tokens in counts},
+            n_values={
+                len(ngram.tokens)
+                if isinstance(ngram, ExtractedNgram)
+                else len(ngram)
+                for ngram in counts
+            },
         )
         logger.info(
             "Appended %d n-gram counts in %.2fs",
@@ -148,7 +177,9 @@ class DuckDbNgramCountRepository:
         try:
             self._con.execute(
                 f"""
-                COPY ngram_counts(lang, corpus, text, n, count, norm_key)
+                COPY ngram_counts(
+                    lang, corpus, text, n, count, norm_key, has_punctuation
+                )
                 FROM '{escaped_path}'
                 (FORMAT CSV, DELIMITER '\t', HEADER false)
                 """
@@ -227,7 +258,8 @@ class DuckDbNgramCountRepository:
 
         if table == TOTAL_COUNTS_TABLE:
             sql = f"""
-            SELECT lang, corpus, text, n, count AS total_count, norm_key
+            SELECT lang, corpus, text, n, count AS total_count, norm_key,
+                   has_punctuation
             FROM {TOTAL_COUNTS_TABLE}
             WHERE {where_clause} AND count >= ?
             ORDER BY total_count DESC, text ASC
@@ -235,10 +267,11 @@ class DuckDbNgramCountRepository:
             """
         else:
             sql = f"""
-            SELECT lang, corpus, text, n, SUM(count) AS total_count, norm_key
+            SELECT lang, corpus, text, n, SUM(count) AS total_count, norm_key,
+                   has_punctuation
             FROM {RAW_COUNTS_TABLE}
             WHERE {where_clause}
-            GROUP BY lang, corpus, text, n, norm_key
+            GROUP BY lang, corpus, text, n, norm_key, has_punctuation
             HAVING SUM(count) >= ?
             ORDER BY total_count DESC, text ASC
             {limit_clause}
@@ -278,6 +311,7 @@ class DuckDbNgramCountRepository:
             n=row[3],
             count=row[4],
             norm_key=row[5],
+            has_punctuation=row[6],
         )
 
     def _select_counts_table(
@@ -365,11 +399,14 @@ class DuckDbNgramCountRepository:
         )
         self._con.execute(
             """
-            INSERT INTO ngram_totals(lang, corpus, text, n, count, norm_key)
-            SELECT lang, corpus, text, n, SUM(count) AS total_count, norm_key
+            INSERT INTO ngram_totals(
+                lang, corpus, text, n, count, norm_key, has_punctuation
+            )
+            SELECT lang, corpus, text, n, SUM(count) AS total_count, norm_key,
+                   has_punctuation
             FROM ngram_counts
             WHERE lang = ? AND corpus = ? AND n = ?
-            GROUP BY lang, corpus, text, n, norm_key
+            GROUP BY lang, corpus, text, n, norm_key, has_punctuation
             """,
             [lang, corpus, n],
         )

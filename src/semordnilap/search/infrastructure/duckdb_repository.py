@@ -24,6 +24,17 @@ class DuckDbSemordnilapSearchRepository:
 
         logger.info("Opening DuckDB database at %s", db_path)
         self._con = duckdb.connect(str(db_path), read_only=True)
+        self._punctuation_tables = {
+            table
+            for table in (RAW_COUNTS_TABLE, TOTAL_COUNTS_TABLE)
+            if self._table_has_column(table, "has_punctuation")
+        }
+
+    def _table_has_column(self, table: str, column: str) -> bool:
+        columns = self._con.execute(
+            f"PRAGMA table_info('{table}')"
+        ).fetchall()
+        return any(row[1] == column for row in columns)
 
     def iter_pairs(self, policy: SearchPolicy):
         logger.info(
@@ -97,12 +108,14 @@ class DuckDbSemordnilapSearchRepository:
                 src.n AS source_n,
                 src.total_count AS source_count,
                 src.norm_key AS source_norm_key,
+                src.has_punctuation AS source_has_punctuation,
                 tgt.lang AS target_lang,
                 tgt.corpus AS target_corpus,
                 tgt.text AS target_text,
                 tgt.n AS target_n,
                 tgt.total_count AS target_count,
-                tgt.norm_key AS target_norm_key
+                tgt.norm_key AS target_norm_key,
+                tgt.has_punctuation AS target_has_punctuation
             FROM src
             JOIN tgt ON reverse(src.norm_key) = tgt.norm_key
             WHERE 1 = 1
@@ -124,12 +137,14 @@ class DuckDbSemordnilapSearchRepository:
                 source_n=row[3],
                 source_count=row[4],
                 source_norm_key=row[5],
-                target_lang=row[6],
-                target_corpus=row[7],
-                target_text=row[8],
-                target_n=row[9],
-                target_count=row[10],
-                target_norm_key=row[11],
+                source_has_punctuation=row[6],
+                target_lang=row[7],
+                target_corpus=row[8],
+                target_text=row[9],
+                target_n=row[10],
+                target_count=row[11],
+                target_norm_key=row[12],
+                target_has_punctuation=row[13],
             )
 
     def _counts_table(self, policy: SearchPolicy) -> str:
@@ -290,22 +305,34 @@ class DuckDbSemordnilapSearchRepository:
             params.append(max_norm_len)
 
         where_clause = " AND ".join(where)
+        punctuation_expression = (
+            "has_punctuation"
+            if table in self._punctuation_tables
+            else "false"
+        )
         if table == TOTAL_COUNTS_TABLE:
             return (
                 f"""
-                SELECT lang, corpus, text, n, count AS total_count, norm_key
+                SELECT lang, corpus, text, n, count AS total_count, norm_key,
+                       {punctuation_expression} AS has_punctuation
                 FROM {TOTAL_COUNTS_TABLE}
                 WHERE {where_clause} AND count >= ?
                 """,
                 [*params, min_count],
             )
 
+        punctuation_group = (
+            ", has_punctuation"
+            if table in self._punctuation_tables
+            else ""
+        )
         return (
             f"""
-            SELECT lang, corpus, text, n, SUM(count) AS total_count, norm_key
+            SELECT lang, corpus, text, n, SUM(count) AS total_count, norm_key,
+                   {punctuation_expression} AS has_punctuation
             FROM {RAW_COUNTS_TABLE}
             WHERE {where_clause}
-            GROUP BY lang, corpus, text, n, norm_key
+            GROUP BY lang, corpus, text, n, norm_key{punctuation_group}
             HAVING SUM(count) >= ?
             """,
             [*params, min_count],
