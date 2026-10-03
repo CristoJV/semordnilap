@@ -3,6 +3,7 @@ import pytest
 from collections import Counter
 
 from semordnilap.ngrams.infrastructure import DuckDbNgramCountRepository
+from semordnilap.scoring import score_semordnilap_pair
 from semordnilap.search.application import FindSemordnilapsCommand, run_search
 from semordnilap.search.domain import SearchPolicy
 from semordnilap.search.infrastructure import DuckDbSemordnilapSearchRepository
@@ -110,7 +111,7 @@ def test_search_ngrams_exports_tsv(tmp_path):
     assert exported == 1
     assert rows[0]["source_text"] == "roda"
     assert rows[0]["target_text"] == "a dor"
-    assert float(rows[0]["pair_score"]) > 0
+    assert float(rows[0]["pair_score"]) == score_semordnilap_pair(5, 4)
 
 
 def test_search_ngrams_can_use_compacted_counts_and_filters(tmp_path):

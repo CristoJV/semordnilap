@@ -2,13 +2,25 @@
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class NullPlausibilityScorer:
     def score(self, text: str, lang: str) -> float:
         return 0.0
+
+
+class CompositePlausibilityScorer:
+    def __init__(self, scorers) -> None:
+        self._scorers = list(scorers)
+
+    @lru_cache(maxsize=100_000)
+    def score(self, text: str, lang: str) -> float:
+        return sum(scorer.score(text, lang) for scorer in self._scorers)
 
 
 class KenLmPlausibilityScorer:
@@ -47,12 +59,36 @@ def build_plausibility_scorer(
     target_lang: str,
     target_lm: Path | None,
 ):
-    models = {}
+    scorers = []
+    lm_models = {}
     if source_lm is not None:
-        models[source_lang] = source_lm
+        lm_models[source_lang] = source_lm
     if target_lm is not None:
-        models[target_lang] = target_lm
-    if not models:
-        return NullPlausibilityScorer()
-    return KenLmPlausibilityScorer(models)
+        lm_models[target_lang] = target_lm
+    if lm_models:
+        missing = []
+        if source_lm is None:
+            missing.append(f"{source_lang}=missing")
+        if target_lm is None:
+            missing.append(f"{target_lang}=missing")
+        if missing:
+            logger.warning(
+                "Partial KenLM setup: %s. Missing sides get plausibility=0.0, "
+                "which affects the fluency term.",
+                ", ".join(missing),
+            )
+        logger.info(
+            "Loading KenLM plausibility models for languages: %s",
+            ", ".join(sorted(lm_models)),
+        )
+        scorers.append(KenLmPlausibilityScorer(lm_models))
 
+    if not scorers:
+        logger.warning(
+            "No KenLM models loaded; plausibility=0.0 and fluency does not "
+            "affect ranking."
+        )
+        return NullPlausibilityScorer()
+    if len(scorers) == 1:
+        return scorers[0]
+    return CompositePlausibilityScorer(scorers)

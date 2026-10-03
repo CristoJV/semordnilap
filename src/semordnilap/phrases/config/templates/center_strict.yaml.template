@@ -1,0 +1,64 @@
+# Center-out phrase generation template with model-backed strict completion.
+# All paths are examples/placeholders and should be replaced locally.
+
+input: data/search/example_pairs.tsv
+out: data/search/example.phrases.center.strict.tsv
+
+language:
+  source: es
+  target: pt
+
+models:
+  source_lm: data/lm/source.binary
+  target_lm: data/lm/target.binary
+  source_spacy_model: source_model_name
+  target_spacy_model: target_model_name
+  source_boundary_model: null
+  target_boundary_model: null
+  source_transition_model: null
+  target_transition_model: null
+  disable_syntax: false
+
+search:
+  min_source_count: 5
+  min_target_count: 5
+  min_pair_score: 0.0
+  max_source_n: 3
+  max_target_n: 3
+  piece_limit: 1500
+  min_pieces: 3
+  max_pieces: 7
+  beam_size: 1000
+  candidate_pool_size: 4000
+  max_results: 1000
+  expand_sides: center
+  center_seed_limit: 500
+  allow_repeated_pieces: false
+  keep_permutations: false
+
+scoring:
+  pair_weight: 1.0
+  fluency_weight: 1.0
+  syntax_weight: 1.0
+  morphology_weight: 1.0
+  partial_viability_weight: 1.0
+  completion_weight: 1.0
+  dead_end_weight: 1.0
+  boundary_weight: 1.0
+  edge_compatibility_weight: 1.0
+  min_completion_score: 0.0
+  min_partial_viability: -1000000000.0
+  forbid_low_completion_final: true
+  repeat_penalty: 8.0
+  complete_bonus: 2.0
+  morphology_agreement_features:
+    - Gender
+    - Number
+
+output:
+  trace_out: data/search/example.phrases.center.strict.trace.json
+  trace_top_n: 25
+
+logging:
+  level: info
+  color: auto

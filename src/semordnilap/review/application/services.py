@@ -9,12 +9,6 @@ TABLE_HEADERS = [
     "source_text",
     "target_text",
     "pair_score",
-    "source_count",
-    "target_count",
-    "source_n",
-    "target_n",
-    "source_norm_key",
-    "target_norm_key",
 ]
 
 
@@ -40,12 +34,6 @@ def rows_to_table(rows: list[ReviewRow]) -> list[list]:
             row.source_text,
             row.target_text,
             row.pair_score,
-            row.source_count,
-            row.target_count,
-            row.source_n,
-            row.target_n,
-            row.source_norm_key,
-            row.target_norm_key,
         ]
         for row in rows
     ]
@@ -75,4 +63,3 @@ def build_detail_markdown(row: ReviewRow | None) -> str:
             f"Key check: **{status}**",
         ]
     )
-

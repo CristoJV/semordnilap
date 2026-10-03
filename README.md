@@ -42,6 +42,13 @@ flowchart TD
     E --> F
 ```
 
+Detailed operational guides live in [`docs/guides`](docs/guides/index.md):
+
+- [N-grams](docs/guides/ngrams.md)
+- [Search](docs/guides/search.md)
+- [Phrases](docs/guides/phrases.md)
+- [Review](docs/guides/review.md)
+
 ## Installation
 
 This project uses [`uv`](https://docs.astral.sh/uv/).
@@ -184,30 +191,84 @@ C.target B.target A.target
 Run the phrase generator:
 
 ```bash
-uv run sp_phrases \
+uv run sp_phrases generate \
   --input data/search/es_pt.tsv \
   --out data/search/es_pt.phrases.tsv \
   --min-source-count 5 \
   --min-target-count 5 \
   --piece-limit 1000 \
-  --beam-size 500 \
+  --beam-size 1000 \
   --min-pieces 2 \
-  --max-pieces 3 \
+  --max-pieces 4 \
   --max-results 1000
 ```
 
-The phrase scorer combines pair quality, corpus frequency, simple lexical
-signals, and penalties for fragile fragments or repeated/reversible pieces.
+The phrase generator is intentionally small: it uses a beam search with two
+scores, `growth_score` for partial states and `phrase_score` for final ranking.
+Both are built from the same few signals: pair quality, optional KenLM fluency,
+optional model-backed syntax, optional model-backed morphology, repetition
+penalty, and a small completion bonus.
+
+When spaCy models are provided, the CLI annotates each source/target piece once
+with model-backed POS, dependency, and morphology features before graph
+expansion. Without models, this layer is skipped entirely; there is no
+rule-based fallback.
+
+The official spaCy model directory is https://spacy.io/models, and the download
+command installs the compatible pipeline for your installed spaCy version:
+
+```bash
+uv run python -m spacy download es_core_news_sm
+uv run python -m spacy download pt_core_news_sm
+```
+
+Use the `md` or `lg` variants from the same directory when you want better
+quality and can afford the extra model size.
+
+Then run:
+
+```bash
+uv run sp_phrases generate \
+  --input data/search/es_pt.tsv \
+  --out data/search/es_pt.phrases.spacy.tsv \
+  --source-spacy-model es_core_news_sm \
+  --target-spacy-model pt_core_news_sm \
+  --syntax-weight 1.0 \
+  --morphology-weight 1.0
+```
+
+`--morphology-weight` enables a generic model-backed agreement penalty. By
+default it checks `Gender` and `Number` from spaCy `Token.morph`, so phrases
+like a singular noun followed by a plural adjective can be demoted when the
+model exposes those features. You can choose the checked features with
+`--morphology-agreement-features Gender,Number,Tense`.
+
+Use `--disable-syntax` to force the purely graph/statistical behavior even when
+model names are passed.
+
+For debugging poor rankings, write a compact JSON trace of the graph search:
+
+```bash
+uv run sp_phrases generate \
+  --input data/search/es_pt.tsv \
+  --out data/search/es_pt.phrases.tsv \
+  --trace-out data/search/es_pt.phrases.trace.json
+```
+
+The trace records each phrase length, how many candidates were expanded, the
+top growth-score paths, the top final-score paths kept in the beam, and selected
+parent-to-child edges. This is the easiest way to see whether a good phrase is
+lost during growth or only loses in final ranking.
 
 Optionally, you can add external language-model plausibility with KenLM:
 
 ```bash
-uv run sp_phrases \
+uv run sp_phrases generate \
   --input data/search/es_pt.tsv \
   --out data/search/es_pt.phrases.lm.tsv \
   --source-lm data/lm/es.bin \
   --target-lm data/lm/pt.bin \
-  --plausibility-weight 1.0
+  --fluency-weight 1.0
 ```
 
 Without language models, the plausibility signal is disabled.
@@ -267,7 +328,7 @@ uv run sp_search_ngrams \
   --min-tgt-count 5
 
 # 5. Generate phrase candidates
-uv run sp_phrases \
+uv run sp_phrases generate \
   --input data/search/es_pt.tsv \
   --out data/search/es_pt.phrases.tsv \
   --min-source-count 5 \

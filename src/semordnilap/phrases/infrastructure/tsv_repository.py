@@ -7,18 +7,13 @@ import json
 from pathlib import Path
 
 from semordnilap.phrases.domain import PhraseCandidate, PhrasePiece
+from semordnilap.scoring import score_semordnilap_pair
 
 
 def parse_int(value: str | None, default: int = 0) -> int:
     if value is None or value == "":
         return default
     return int(float(value))
-
-
-def parse_float(value: str | None, default: float = 0.0) -> float:
-    if value is None or value == "":
-        return default
-    return float(value)
 
 
 class TsvPhraseRepository:
@@ -41,8 +36,34 @@ class TsvPhraseRepository:
                     "source_phrase",
                     "target_phrase",
                     "phrase_score",
+                    "growth_score",
+                    "growth_mode",
                     "source_plausibility",
                     "target_plausibility",
+                    "transition_score",
+                    "syntax_score",
+                    "source_partial_viability",
+                    "target_partial_viability",
+                    "bilingual_partial_viability",
+                    "source_completion_score",
+                    "target_completion_score",
+                    "bilingual_completion_score",
+                    "source_boundary_score",
+                    "target_boundary_score",
+                    "source_dead_end_score",
+                    "target_dead_end_score",
+                    "bilingual_dead_end_score",
+                    "source_need_label",
+                    "source_need_confidence",
+                    "target_need_label",
+                    "target_need_confidence",
+                    "edge_compatibility_score",
+                    "source_edge_compatibility",
+                    "target_edge_compatibility",
+                    "last_expansion_side",
+                    "left_piece_ids",
+                    "center_piece_ids",
+                    "right_piece_ids",
                     "piece_count",
                     "formal_ok",
                     "source_norm_key",
@@ -66,13 +87,15 @@ class TsvPhraseRepository:
     def _piece_from_record(
         self, index: int, record: dict[str, str]
     ) -> PhrasePiece:
+        source_count = parse_int(record.get("source_count"))
+        target_count = parse_int(record.get("target_count"))
         return PhrasePiece(
             id=index,
             source_text=record.get("source_text", ""),
             target_text=record.get("target_text", ""),
-            pair_score=parse_float(record.get("pair_score")),
-            source_count=parse_int(record.get("source_count")),
-            target_count=parse_int(record.get("target_count")),
+            pair_score=score_semordnilap_pair(source_count, target_count),
+            source_count=source_count,
+            target_count=target_count,
             source_n=parse_int(record.get("source_n")),
             target_n=parse_int(record.get("target_n")),
             source_norm_key=record.get("source_norm_key", ""),
@@ -86,8 +109,43 @@ class TsvPhraseRepository:
             "source_phrase": candidate.source_phrase,
             "target_phrase": candidate.target_phrase,
             "phrase_score": candidate.score,
+            "growth_score": candidate.growth_score,
+            "growth_mode": candidate.growth_mode,
             "source_plausibility": candidate.source_plausibility,
             "target_plausibility": candidate.target_plausibility,
+            "transition_score": candidate.transition_score,
+            "syntax_score": candidate.syntax_score,
+            "source_partial_viability": candidate.source_partial_viability,
+            "target_partial_viability": candidate.target_partial_viability,
+            "bilingual_partial_viability": candidate.bilingual_partial_viability,
+            "source_completion_score": candidate.source_completion_score,
+            "target_completion_score": candidate.target_completion_score,
+            "bilingual_completion_score": candidate.bilingual_completion_score,
+            "source_boundary_score": candidate.source_boundary_score,
+            "target_boundary_score": candidate.target_boundary_score,
+            "source_dead_end_score": candidate.source_dead_end_score,
+            "target_dead_end_score": candidate.target_dead_end_score,
+            "bilingual_dead_end_score": candidate.bilingual_dead_end_score,
+            "source_need_label": candidate.source_need_label,
+            "source_need_confidence": candidate.source_need_confidence,
+            "target_need_label": candidate.target_need_label,
+            "target_need_confidence": candidate.target_need_confidence,
+            "edge_compatibility_score": candidate.edge_compatibility_score,
+            "source_edge_compatibility": candidate.source_edge_compatibility,
+            "target_edge_compatibility": candidate.target_edge_compatibility,
+            "last_expansion_side": candidate.last_expansion_side,
+            "left_piece_ids": json.dumps(
+                list(candidate.left_piece_ids),
+                ensure_ascii=False,
+            ),
+            "center_piece_ids": json.dumps(
+                list(candidate.center_piece_ids),
+                ensure_ascii=False,
+            ),
+            "right_piece_ids": json.dumps(
+                list(candidate.right_piece_ids),
+                ensure_ascii=False,
+            ),
             "piece_count": candidate.piece_count,
             "formal_ok": candidate.formal_ok,
             "source_norm_key": candidate.source_norm_key,

@@ -104,33 +104,57 @@ def build_interface(initial_path: Path | None):
             path_input = gr.Textbox(
                 label="TSV path",
                 value=str(initial_path) if initial_path else "",
-                scale=4,
+                scale=5,
+                min_width=280,
             )
-            load_button = gr.Button("Load", variant="primary")
-
-        file_input = gr.File(
-            label="Select TSV",
-            file_types=[".tsv", ".txt"],
-            type="filepath",
-        )
+            load_button = gr.Button(
+                "Load", variant="primary", scale=1, min_width=90
+            )
+            file_input = gr.File(
+                label="Select",
+                file_types=[".tsv", ".txt"],
+                type="filepath",
+                scale=2,
+                min_width=180,
+            )
         status = gr.Markdown(initial_status)
 
         with gr.Row():
-            source_contains = gr.Textbox(label="Source contains")
-            target_contains = gr.Textbox(label="Target contains")
-            min_pair_score = gr.Number(label="Min score", value=0.0)
-            min_source_count = gr.Number(label="Min source count", value=0)
-            min_target_count = gr.Number(label="Min target count", value=0)
-
-        with gr.Row():
+            source_contains = gr.Textbox(
+                label="Source contains", scale=2, min_width=150
+            )
+            target_contains = gr.Textbox(
+                label="Target contains", scale=2, min_width=150
+            )
+            min_pair_score = gr.Number(
+                label="Min score", value=0.0, scale=1, min_width=110
+            )
+            min_source_count = gr.Number(
+                label="Min source count", value=0, scale=1, min_width=120
+            )
+            min_target_count = gr.Number(
+                label="Min target count", value=0, scale=1, min_width=120
+            )
             source_n = gr.Dropdown(
-                ["all", "1", "2", "3"], value="all", label="Source n"
+                ["all", "1", "2", "3"],
+                value="all",
+                label="Source n",
+                scale=1,
+                min_width=90,
             )
             target_n = gr.Dropdown(
-                ["all", "1", "2", "3"], value="all", label="Target n"
+                ["all", "1", "2", "3"],
+                value="all",
+                label="Target n",
+                scale=1,
+                min_width=90,
             )
-            limit = gr.Number(label="Rows", value=500, precision=0)
-            apply_button = gr.Button("Apply filters")
+            limit = gr.Number(
+                label="Rows", value=500, precision=0, scale=1, min_width=90
+            )
+            apply_button = gr.Button(
+                "Apply", variant="secondary", scale=1, min_width=90
+            )
 
         table = gr.Dataframe(
             headers=TABLE_HEADERS,
@@ -139,12 +163,6 @@ def build_interface(initial_path: Path | None):
                 "str",
                 "str",
                 "number",
-                "number",
-                "number",
-                "number",
-                "number",
-                "str",
-                "str",
             ],
             interactive=False,
             wrap=True,

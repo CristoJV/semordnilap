@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
+
+from semordnilap.scoring import score_semordnilap_pair
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,7 @@ class SemordnilapPair:
 
     @property
     def pair_score(self) -> float:
-        score = math.log(self.source_count + 1) + math.log(
-            self.target_count + 1
+        return score_semordnilap_pair(
+            self.source_count,
+            self.target_count,
         )
-        return round(score, 6)

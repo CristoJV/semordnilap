@@ -61,7 +61,7 @@ def test_review_filters_match_text_score_counts_and_n():
 def test_rows_to_table_uses_expected_order():
     table = rows_to_table([sample_row()])
 
-    assert table[0][:5] == ["roda", "a dor", 4.2, 5, 7]
+    assert table[0] == ["roda", "a dor", 4.2]
 
 
 def test_detail_markdown_shows_reverse_check():

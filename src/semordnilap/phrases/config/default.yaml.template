@@ -1,0 +1,64 @@
+# Full default phrase generation configuration.
+# This file mirrors the CLI defaults. Replace input/out before running.
+
+input: data/search/example_pairs.tsv
+out: data/search/example.phrases.tsv
+
+language:
+  source: es
+  target: pt
+
+search:
+  min_source_count: 100
+  min_target_count: 100
+  min_pair_score: 0.0
+  max_source_n: 3
+  max_target_n: 3
+  piece_limit: 1000
+  min_pieces: 2
+  max_pieces: 4
+  beam_size: 1000
+  candidate_pool_size: null
+  max_results: 500
+  expand_sides: right
+  center_seed_limit: 500
+  allow_repeated_pieces: false
+  keep_permutations: false
+
+scoring:
+  pair_weight: 1.0
+  fluency_weight: null
+  syntax_weight: 1.0
+  morphology_weight: 0.0
+  partial_viability_weight: 1.0
+  completion_weight: 1.0
+  dead_end_weight: 1.0
+  boundary_weight: 1.0
+  edge_compatibility_weight: 1.0
+  min_completion_score: 0.0
+  min_partial_viability: -.inf
+  forbid_low_completion_final: true
+  repeat_penalty: 8.0
+  complete_bonus: 2.0
+  morphology_agreement_features:
+    - Gender
+    - Number
+
+models:
+  source_lm: null
+  target_lm: null
+  source_spacy_model: null
+  target_spacy_model: null
+  source_boundary_model: null
+  target_boundary_model: null
+  source_transition_model: null
+  target_transition_model: null
+  disable_syntax: false
+
+output:
+  trace_out: null
+  trace_top_n: 25
+
+logging:
+  level: info
+  color: auto
