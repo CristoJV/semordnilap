@@ -6,10 +6,14 @@
 uv sync
 ```
 
-## 2. Descargar Wikisource
+## 2. Descargar un corpus
+
+La orden `sp_corpus` selecciona la fuente mediante un subcomando.
+
+### Wikisource
 
 ```bash
-uv run sp_corpus_wikisource \
+uv run sp_corpus wikisource \
   --langs es gl \
   --date 20231201 \
   --revision <REVISION_HF> \
@@ -22,11 +26,45 @@ manifiesto contiene revisión, configuración, documentos rechazados, checksums
 y `artifact_id`. La descarga es streaming y reanudable:
 
 ```bash
-uv run sp_corpus_wikisource ... --resume
+uv run sp_corpus wikisource ... --resume
 ```
 
 `--force` reemplaza únicamente el artefacto solicitado. No se escribe nunca un
 archivo final incompleto.
+
+### CorpusNÓS
+
+La selección predeterminada evita las fuentes con más ruido (`web_crawls` y
+`translation_corpora`) y descarga libros, artículos de investigación,
+prensa/blogs y contenido enciclopédico:
+
+```bash
+uv run sp_corpus corpusnos \
+  --revision <REVISION_HF> \
+  --out-dir data/corpus/corpusnos
+```
+
+Puede elegirse una o varias categorías lógicas:
+
+```bash
+uv run sp_corpus corpusnos \
+  --subsets books research_articles encyclopedic \
+  --out-dir data/corpus/corpusnos
+```
+
+`--subsets all` incluye las ocho categorías. Para controlar por separado los
+datos públicos y los cedidos por acuerdo, `--configs` acepta los nombres
+exactos de Hugging Face; por ejemplo:
+
+```bash
+uv run sp_corpus corpusnos \
+  --configs public_data_encyclopedic dta_encyclopedic \
+  --out-dir data/corpus/corpusnos
+```
+
+Cada configuración produce un directorio `corpusnos_<config>/`. La descarga
+es streaming, comprimida y dividida en shards; `--resume` conserva artefactos
+ya completos y continúa los parciales.
 
 ## 3. Descargar y comprobar Stanza
 

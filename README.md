@@ -5,7 +5,7 @@ en español y gallego.
 
 ```mermaid
 flowchart LR
-    H[Wikisource revision] --> C[Corpus shards]
+    H[HF corpus revision] --> C[Corpus shards]
     C --> T[Stanza ES/GL]
     T --> U[UD v2 gzip shards]
     U --> N[Streaming n-grams]
@@ -16,7 +16,7 @@ flowchart LR
 ## Superficie soportada
 
 ```text
-sp_corpus_wikisource   descarga corpus versionados
+sp_corpus              descarga corpus versionados por subcomando
 sp_tag                 descarga modelos, smoke tests y tagging contextual
 sp_ngrams              extracción, migración, inspección y exportación
 sp_search_ngrams       consumidor opcional de semordnilaps

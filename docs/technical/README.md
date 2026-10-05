@@ -19,7 +19,7 @@ flowchart LR
 
 | Capa | Módulos | Responsabilidad |
 |---|---|---|
-| Corpus | `corpus/wikisource.py` | export streaming, shards, revisión y resume |
+| Corpus | `corpus/{cli,wikisource,corpusnos}.py` | selección de fuente/subconjuntos, export streaming, shards, revisión y resume |
 | Tagging domain | `tagging/domain.py` | contrato neutral, UPOS, spans, v1/v2 |
 | Tagging adapters | `tagging/stanza.py`, `tagging/io.py` | Stanza y lectura streaming |
 | Tagging application | `tagging/application.py`, `tagging/sharded.py` | checkpoints v1, shards v2, splitting y cuarentena |

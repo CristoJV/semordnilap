@@ -29,10 +29,7 @@ CORPUS_SCHEMA = "semordnilap.source-corpus"
 CORPUS_SCHEMA_VERSION = 1
 
 
-def build_argparser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Download versioned Wikisource corpus artifacts."
-    )
+def configure_parser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
     parser.add_argument("--date", default=DEFAULT_DATE)
     parser.add_argument("--revision", default="main")
@@ -49,6 +46,13 @@ def build_argparser() -> argparse.ArgumentParser:
     recovery = parser.add_mutually_exclusive_group()
     recovery.add_argument("--resume", action="store_true")
     recovery.add_argument("--force", action="store_true")
+
+
+def build_argparser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Download versioned Wikisource corpus artifacts."
+    )
+    configure_parser(parser)
     return parser
 
 
@@ -79,12 +83,16 @@ def _record(row: dict) -> dict | None:
     text = row.get("text")
     if not isinstance(text, str) or not text.strip():
         return None
-    return {
+    record = {
         "id": row.get("id"),
         "url": row.get("url"),
         "title": row.get("title"),
         "text": text,
     }
+    for field in ("num_words", "num_tokens", "pyplexity_score", "lang"):
+        if row.get(field) is not None:
+            record[field] = row[field]
+    return record
 
 
 def _open_shard(path: Path, compression: str):
@@ -272,8 +280,7 @@ def export_language(args: argparse.Namespace, lang: str) -> dict:
         )
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = build_argparser().parse_args(argv)
+def run(args: argparse.Namespace) -> int:
     if args.shard_docs < 1:
         raise ValueError("--shard-docs must be at least 1")
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -296,6 +303,10 @@ def main(argv: list[str] | None = None) -> int:
     collection["sha256"] = collection["artifact_id"].split(":", 1)[1]
     write_json_atomic(args.out_dir / "manifest.json", collection)
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    return run(build_argparser().parse_args(argv))
 
 
 if __name__ == "__main__":

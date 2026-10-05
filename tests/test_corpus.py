@@ -1,7 +1,15 @@
 import gzip
+import json
 
 import pytest
 
+from semordnilap.corpus import corpusnos as corpusnos_module
+from semordnilap.corpus.cli import build_argparser
+from semordnilap.corpus.corpusnos import (
+    ALL_CONFIGS,
+    DEFAULT_SUBSETS,
+    selected_configs,
+)
 from semordnilap.corpus.wikisource import export_rows
 from semordnilap.utils.artifacts import read_complete_manifest
 from semordnilap.utils.io import iter_texts
@@ -82,3 +90,111 @@ def test_corpus_export_resumes_only_after_committed_shards(tmp_path):
 
     assert manifest["documents"] == 3
     assert list(iter_texts(artifact, "jsonl")) == ["uno", "dos", "tres"]
+
+
+def test_corpus_cli_requires_and_dispatches_subcommands():
+    parser = build_argparser()
+
+    wikisource = parser.parse_args(["wikisource", "--langs", "gl"])
+    corpusnos = parser.parse_args(["corpusnos"])
+
+    assert wikisource.corpus == "wikisource"
+    assert wikisource.langs == ["gl"]
+    assert corpusnos.corpus == "corpusnos"
+    assert corpusnos.subsets == list(DEFAULT_SUBSETS)
+
+
+def test_corpusnos_defaults_to_low_noise_configs():
+    args = build_argparser().parse_args(["corpusnos"])
+
+    assert selected_configs(args) == [
+        "dta_books",
+        "dta_research_articles",
+        "dta_press_and_blogs",
+        "public_data_press_and_blogs",
+        "dta_encyclopedic",
+        "public_data_encyclopedic",
+    ]
+    assert "public_data_web_crawls" not in selected_configs(args)
+    assert "public_data_translation_corpora" not in selected_configs(args)
+
+
+def test_corpusnos_can_select_logical_subsets_or_exact_configs():
+    parser = build_argparser()
+    subsets = parser.parse_args(
+        ["corpusnos", "--subsets", "governmental", "web_contents"]
+    )
+    exact = parser.parse_args(
+        ["corpusnos", "--configs", "public_data_web_crawls"]
+    )
+    all_subsets = parser.parse_args(["corpusnos", "--subsets", "all"])
+
+    assert selected_configs(subsets) == [
+        "dta_governmental",
+        "dta_web_contents",
+    ]
+    assert selected_configs(exact) == ["public_data_web_crawls"]
+    assert selected_configs(all_subsets) == list(ALL_CONFIGS)
+
+
+def test_corpus_export_preserves_optional_corpusnos_metadata(tmp_path):
+    artifact = tmp_path / "corpusnos"
+    corpusnos_rows = [
+        {
+            "id": 7,
+            "text": "texto galego",
+            "num_words": 2,
+            "num_tokens": 3,
+            "pyplexity_score": 1.25,
+            "lang": "gl",
+        }
+    ]
+
+    export_rows(
+        corpusnos_rows,
+        artifact,
+        identity={**IDENTITY, "config": "dta_books", "lang": "gl"},
+        shard_docs=1,
+        compression="none",
+        resume=False,
+    )
+
+    record = json.loads(
+        (artifact / "part-00000.jsonl").read_text(encoding="utf-8")
+    )
+    assert record == {
+        "id": 7,
+        "url": None,
+        "title": None,
+        "text": "texto galego",
+        "num_words": 2,
+        "num_tokens": 3,
+        "pyplexity_score": 1.25,
+        "lang": "gl",
+    }
+
+
+def test_corpusnos_run_exports_selected_config_and_collection(
+    tmp_path, monkeypatch
+):
+    rows = [{"id": 1, "text": "un documento", "lang": "gl"}]
+    monkeypatch.setattr(
+        corpusnos_module, "load_hf_dataset", lambda *args, **kwargs: rows
+    )
+    args = build_argparser().parse_args(
+        [
+            "corpusnos",
+            "--configs",
+            "dta_books",
+            "--out-dir",
+            str(tmp_path),
+        ]
+    )
+
+    assert corpusnos_module.run(args) == 0
+
+    artifact = tmp_path / "corpusnos_dta_books"
+    assert list(iter_texts(artifact, "jsonl")) == ["un documento"]
+    collection = read_complete_manifest(tmp_path, verify_checksums=False)
+    assert collection["configs"] == ["dta_books"]
+    assert collection["artifacts"][0]["config"] == "dta_books"
