@@ -33,3 +33,15 @@ class ExtractNgramsCommand:
     compact_n: int
     compact_after_count: bool
     policy: NgramExtractionPolicy
+    allow_incomplete_input: bool = False
+    dataset_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.corpus.strip():
+            raise ValueError("corpus cannot be empty")
+        if self.limit_docs < 0:
+            raise ValueError("limit_docs cannot be negative")
+        if self.chunk_docs < 1:
+            raise ValueError("chunk_docs must be at least 1")
+        if self.flush_unique_ngrams < 1:
+            raise ValueError("flush_unique_ngrams must be at least 1")

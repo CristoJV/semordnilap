@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from semordnilap.ngrams.domain.scoring import score_ngram
@@ -15,10 +15,24 @@ class ExtractedNgram:
     """Lexical tokens together with their punctuation-preserving surface."""
 
     tokens: tuple[str, ...]
-    text: str
+    surface_key: str
+    surface_display: str = field(default="", compare=False, hash=False)
+
+    @property
+    def text(self) -> str:
+        return self.surface_key
 
 
 NgramKey = tuple[str, ...] | ExtractedNgram
+
+
+@dataclass(frozen=True)
+class TaggedNgramKey:
+    """One contextual UPOS interpretation of a textual n-gram."""
+
+    ngram: ExtractedNgram
+    upos_pattern: str
+    crosses_sentence: bool = False
 
 
 @dataclass(frozen=True)
@@ -30,7 +44,19 @@ class NgramExtractionPolicy:
     min_norm_len: int = 3
     include_all_stopword_ngrams: bool = False
     fold_nasal_letters: bool = False
-    omit_punctuation: bool = True
+    omit_punctuation: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.lang.strip():
+            raise ValueError("lang cannot be empty")
+        if not 1 <= self.max_n <= 3:
+            raise ValueError("max_n must be between 1 and 3")
+        if self.min_token_len < 1:
+            raise ValueError("min_token_len must be at least 1")
+        if self.max_token_len < self.min_token_len:
+            raise ValueError("max_token_len cannot be less than min_token_len")
+        if self.min_norm_len < 0:
+            raise ValueError("min_norm_len cannot be negative")
 
 
 @dataclass(frozen=True)
@@ -42,6 +68,8 @@ class NgramCount:
     count: int
     norm_key: str
     has_punctuation: bool = False
+    upos_counts: tuple[tuple[str, int], ...] = ()
+    cross_sentence_count: int = 0
 
     @property
     def tokens(self) -> tuple[str, ...]:
@@ -70,6 +98,16 @@ class NgramCountRepository(Protocol):
     ) -> None:
         raise NotImplementedError
 
+    def add_tagged_counts(
+        self,
+        counts: Counter[TaggedNgramKey],
+        *,
+        lang: str,
+        corpus: str,
+        fold_nasal_letters: bool,
+    ) -> None:
+        raise NotImplementedError
+
     def iter_counts(
         self,
         *,
@@ -81,6 +119,7 @@ class NgramCountRepository(Protocol):
         min_norm_len: int = 0,
         max_norm_len: int = 0,
         source: str = "auto",
+        dataset_id: str | None = None,
     ) -> Iterable[NgramCount]:
         raise NotImplementedError
 

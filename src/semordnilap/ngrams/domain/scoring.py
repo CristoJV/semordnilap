@@ -35,4 +35,3 @@ def score_ngram(
         score += 0.2
 
     return round(score, 6)
-

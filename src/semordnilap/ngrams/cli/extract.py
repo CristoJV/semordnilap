@@ -13,6 +13,8 @@ from semordnilap.ngrams.application import (
 )
 from semordnilap.ngrams.domain import NgramExtractionPolicy
 from semordnilap.ngrams.infrastructure import DuckDbNgramCountRepository
+from semordnilap.utils.io import detect_corpus_format
+from semordnilap.utils.artifacts import ArtifactLock
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,6 +53,10 @@ def add_lang_corpus(
         default=corpus_default,
         help="Corpus identifier stored with each n-gram.",
     )
+    parser.add_argument(
+        "--dataset-id",
+        help="Select one immutable extraction identity when an alias is ambiguous.",
+    )
 
 
 def add_policy_options(parser: argparse.ArgumentParser) -> None:
@@ -73,11 +79,8 @@ def add_policy_options(parser: argparse.ArgumentParser) -> None:
         "--omit-punctuation",
         dest="omit_punctuation",
         action="store_true",
-        default=True,
-        help=(
-            "Treat every punctuation character as an n-gram boundary "
-            "(default)."
-        ),
+        default=False,
+        help=("Compatibility mode: treat punctuation as an n-gram boundary."),
     )
     punctuation_group.add_argument(
         "--keep-punctuation",
@@ -85,8 +88,10 @@ def add_policy_options(parser: argparse.ArgumentParser) -> None:
         dest="omit_punctuation",
         action="store_false",
         help=(
-            "Allow n-grams to cross punctuation, retaining it in text while "
-            "excluding it from n and norm_key."
+            "Allow n-grams to cross punctuation and sentence boundaries "
+            "(default), "
+            "retaining punctuation in text while excluding it from n and "
+            "norm_key. Document boundaries are always preserved."
         ),
     )
 
@@ -96,10 +101,18 @@ def add_counting_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--format",
         dest="input_format",
-        choices=["auto", "txt", "jsonl"],
+        choices=["auto", "txt", "jsonl", "ud-jsonl"],
         default="auto",
     )
     parser.add_argument("--text-field", default="text")
+    parser.add_argument(
+        "--allow-incomplete-input",
+        action="store_true",
+        help=(
+            "Allow annotated JSONL without a complete artifact manifest. "
+            "Unsafe; intended only for explicit recovery."
+        ),
+    )
     parser.add_argument(
         "--limit-docs",
         type=int,
@@ -208,9 +221,7 @@ def build_argparser() -> argparse.ArgumentParser:
         "db",
         help="Inspect or maintain the DuckDB n-gram store.",
     )
-    db_subparsers = db_parser.add_subparsers(
-        dest="db_command", required=True
-    )
+    db_subparsers = db_parser.add_subparsers(dest="db_command", required=True)
 
     stats_parser = db_subparsers.add_parser(
         "stats",
@@ -248,6 +259,11 @@ def build_argparser() -> argparse.ArgumentParser:
             "progressively."
         ),
     )
+    migrate_parser = db_subparsers.add_parser(
+        "migrate",
+        help="Explicitly migrate a legacy DuckDB schema in place.",
+    )
+    add_db_path(migrate_parser)
     return parser
 
 
@@ -273,10 +289,20 @@ def validate_max_n(args: argparse.Namespace) -> None:
 
 
 def validate_counting_args(args: argparse.Namespace) -> None:
+    if args.limit_docs < 0:
+        raise ValueError("--limit-docs must be 0 or greater")
     if args.chunk_docs < 1:
         raise ValueError("--chunk-docs must be at least 1")
     if args.flush_unique_ngrams < 1:
         raise ValueError("--flush-unique-ngrams must be at least 1")
+    if not args.corpus or not args.corpus.strip():
+        raise ValueError("--corpus cannot be empty")
+    if args.min_token_len < 1:
+        raise ValueError("--min-token-len must be at least 1")
+    if args.max_token_len < args.min_token_len:
+        raise ValueError("--max-token-len cannot be less than --min-token-len")
+    if args.min_norm_len < 0:
+        raise ValueError("--min-norm-len must be 0 or greater")
 
 
 def validate_export_args(args: argparse.Namespace) -> None:
@@ -312,7 +338,7 @@ def policy_from_args(args: argparse.Namespace) -> NgramExtractionPolicy:
             args, "include_all_stopword_ngrams", False
         ),
         fold_nasal_letters=getattr(args, "fold_nasal_letters", False),
-        omit_punctuation=getattr(args, "omit_punctuation", True),
+        omit_punctuation=getattr(args, "omit_punctuation", False),
     )
 
 
@@ -325,6 +351,7 @@ def command_from_args(args: argparse.Namespace) -> ExtractNgramsCommand:
 
     if args.command == "extract":
         validate_counting_args(args)
+        args.input_format = detect_corpus_format(args.input, args.input_format)
     if args.command == "export":
         validate_export_args(args)
 
@@ -359,6 +386,8 @@ def command_from_args(args: argparse.Namespace) -> ExtractNgramsCommand:
             and not getattr(args, "no_compact_after_count", False)
         ),
         policy=policy_from_args(args),
+        allow_incomplete_input=getattr(args, "allow_incomplete_input", False),
+        dataset_id=getattr(args, "dataset_id", None),
     )
 
 
@@ -403,6 +432,30 @@ def log_stats(repository: DuckDbNgramCountRepository, args) -> None:
             )
     else:
         lines.append("scope: no raw rows found")
+
+    if stats["v2_datasets"]:
+        lines.append("immutable datasets:")
+        for (
+            dataset_id,
+            artifact_id,
+            policy_hash,
+            lang,
+            corpus,
+            sample,
+            status,
+            generation,
+        ) in stats["v2_datasets"]:
+            lines.append(
+                f"- {lang}/{corpus}: dataset_id={dataset_id} "
+                f"artifact_id={artifact_id} policy_hash={policy_hash} "
+                f"sample={sample} status={status} "
+                f"generation={generation}"
+            )
+        v2_counts = ", ".join(
+            f"{name}={format_number(rows)}"
+            for name, rows in stats["v2_table_counts"]
+        )
+        lines.append(f"generation storage: {v2_counts}")
 
     if stats["by_n"]:
         lines.append("by n:")
@@ -465,11 +518,17 @@ def main(argv: list[str] | None = None) -> int:
             args.lang,
             args.corpus,
         )
-        repository = DuckDbNgramCountRepository(args.db_path)
+        repository = DuckDbNgramCountRepository(args.db_path, read_only=True)
         try:
             log_stats(repository, args)
         finally:
             repository.close()
+        return 0
+
+    if args.command == "db" and args.db_command == "migrate":
+        with ArtifactLock(args.db_path):
+            DuckDbNgramCountRepository.migrate(args.db_path)
+        logger.info("Migrated DuckDB schema at %s", args.db_path)
         return 0
 
     command = command_from_args(args)
@@ -510,8 +569,13 @@ def main(argv: list[str] | None = None) -> int:
         command.compact_after_count,
     )
 
-    repository = DuckDbNgramCountRepository(args.db_path)
-    affected = run_extraction(command, repository)
+    if command.export_only:
+        repository = DuckDbNgramCountRepository(args.db_path, read_only=True)
+        affected = run_extraction(command, repository)
+    else:
+        with ArtifactLock(args.db_path):
+            repository = DuckDbNgramCountRepository(args.db_path)
+            affected = run_extraction(command, repository)
     if command.delete_only:
         logger.info(
             "Deleted %d n-gram storage rows for lang=%s corpus=%s",

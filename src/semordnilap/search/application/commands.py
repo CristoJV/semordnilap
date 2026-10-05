@@ -13,4 +13,3 @@ class FindSemordnilapsCommand:
     db_path: Path
     output_path: Path
     policy: SearchPolicy
-

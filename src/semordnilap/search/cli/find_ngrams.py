@@ -34,6 +34,8 @@ def build_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--tgt-lang", required=True)
     parser.add_argument("--src-corpus", required=True)
     parser.add_argument("--tgt-corpus", required=True)
+    parser.add_argument("--src-dataset-id")
+    parser.add_argument("--tgt-dataset-id")
     parser.add_argument("--min-src-count", type=int, default=3)
     parser.add_argument("--min-tgt-count", type=int, default=3)
     parser.add_argument(
@@ -106,7 +108,9 @@ def command_from_args(args: argparse.Namespace) -> FindSemordnilapsCommand:
         and args.max_norm_len
         and args.min_norm_len > args.max_norm_len
     ):
-        raise ValueError("--min-norm-len cannot be greater than --max-norm-len")
+        raise ValueError(
+            "--min-norm-len cannot be greater than --max-norm-len"
+        )
 
     policy = SearchPolicy(
         source_lang=args.src_lang,
@@ -123,6 +127,8 @@ def command_from_args(args: argparse.Namespace) -> FindSemordnilapsCommand:
         counts_source=args.counts_source,
         include_palindromes=args.include_palindromes,
         include_identical_text=args.include_identical_text,
+        source_dataset_id=args.src_dataset_id,
+        target_dataset_id=args.tgt_dataset_id,
     )
 
     return FindSemordnilapsCommand(

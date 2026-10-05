@@ -10,6 +10,7 @@ from semordnilap.search.domain import SearchPolicy, SemordnilapPair
 logger = logging.getLogger(__name__)
 RAW_COUNTS_TABLE = "ngram_counts"
 TOTAL_COUNTS_TABLE = "ngram_totals"
+V2_COUNTS_TABLE = "ngram_final_v2"
 
 
 class DuckDbSemordnilapSearchRepository:
@@ -29,11 +30,17 @@ class DuckDbSemordnilapSearchRepository:
             for table in (RAW_COUNTS_TABLE, TOTAL_COUNTS_TABLE)
             if self._table_has_column(table, "has_punctuation")
         }
+        self._has_v2 = bool(
+            self._con.execute(
+                """
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_name = 'extraction_datasets'
+                """
+            ).fetchone()[0]
+        )
 
     def _table_has_column(self, table: str, column: str) -> bool:
-        columns = self._con.execute(
-            f"PRAGMA table_info('{table}')"
-        ).fetchall()
+        columns = self._con.execute(f"PRAGMA table_info('{table}')").fetchall()
         return any(row[1] == column for row in columns)
 
     def iter_pairs(self, policy: SearchPolicy):
@@ -64,7 +71,21 @@ class DuckDbSemordnilapSearchRepository:
         if policy.max_results:
             limit_clause = f"LIMIT {policy.max_results}"
 
-        table = self._counts_table(policy)
+        source_v2 = self._resolve_v2_dataset(
+            lang=policy.source_lang,
+            corpus=policy.source_corpus,
+            dataset_id=policy.source_dataset_id,
+        )
+        target_v2 = self._resolve_v2_dataset(
+            lang=policy.target_lang,
+            corpus=policy.target_corpus,
+            dataset_id=policy.target_dataset_id,
+        )
+        table = (
+            self._counts_table(policy)
+            if not (source_v2 or target_v2)
+            else None
+        )
         if table == TOTAL_COUNTS_TABLE:
             self._validate_compact_counts(
                 lang=policy.source_lang,
@@ -78,24 +99,48 @@ class DuckDbSemordnilapSearchRepository:
                 n=policy.target_n,
                 side="target",
             )
-        src_sql, src_params = self._candidate_sql(
-            table=table,
-            lang=policy.source_lang,
-            corpus=policy.source_corpus,
-            min_count=policy.min_source_count,
-            n=policy.source_n,
-            min_norm_len=policy.min_norm_len,
-            max_norm_len=policy.max_norm_len,
-        )
-        tgt_sql, tgt_params = self._candidate_sql(
-            table=table,
-            lang=policy.target_lang,
-            corpus=policy.target_corpus,
-            min_count=policy.min_target_count,
-            n=policy.target_n,
-            min_norm_len=policy.min_norm_len,
-            max_norm_len=policy.max_norm_len,
-        )
+        if source_v2:
+            src_sql, src_params = self._candidate_v2_sql(
+                dataset=source_v2,
+                lang=policy.source_lang,
+                corpus=policy.source_corpus,
+                min_count=policy.min_source_count,
+                n=policy.source_n,
+                min_norm_len=policy.min_norm_len,
+                max_norm_len=policy.max_norm_len,
+                counts_source=policy.counts_source,
+            )
+        else:
+            src_sql, src_params = self._candidate_sql(
+                table=table or self._counts_table(policy),
+                lang=policy.source_lang,
+                corpus=policy.source_corpus,
+                min_count=policy.min_source_count,
+                n=policy.source_n,
+                min_norm_len=policy.min_norm_len,
+                max_norm_len=policy.max_norm_len,
+            )
+        if target_v2:
+            tgt_sql, tgt_params = self._candidate_v2_sql(
+                dataset=target_v2,
+                lang=policy.target_lang,
+                corpus=policy.target_corpus,
+                min_count=policy.min_target_count,
+                n=policy.target_n,
+                min_norm_len=policy.min_norm_len,
+                max_norm_len=policy.max_norm_len,
+                counts_source=policy.counts_source,
+            )
+        else:
+            tgt_sql, tgt_params = self._candidate_sql(
+                table=table or self._counts_table(policy),
+                lang=policy.target_lang,
+                corpus=policy.target_corpus,
+                min_count=policy.min_target_count,
+                n=policy.target_n,
+                min_norm_len=policy.min_norm_len,
+                max_norm_len=policy.max_norm_len,
+            )
 
         result = self._con.execute(
             f"""
@@ -147,13 +192,86 @@ class DuckDbSemordnilapSearchRepository:
                 target_has_punctuation=row[13],
             )
 
+    def _resolve_v2_dataset(
+        self, *, lang: str, corpus: str, dataset_id: str | None = None
+    ):
+        if not self._has_v2:
+            return None
+        if dataset_id:
+            row = self._con.execute(
+                """
+                SELECT dataset_id, status, active_generation
+                FROM extraction_datasets
+                WHERE dataset_id = ? AND lang = ? AND corpus = ?
+                """,
+                [dataset_id, lang, corpus],
+            ).fetchone()
+            if not row:
+                raise ValueError(
+                    f"Dataset {dataset_id!r} does not match {lang}/{corpus}"
+                )
+            return row
+        rows = self._con.execute(
+            """
+            SELECT dataset_id, status, active_generation
+            FROM extraction_datasets
+            WHERE lang = ? AND corpus = ?
+            """,
+            [lang, corpus],
+        ).fetchall()
+        if len(rows) > 1:
+            raise ValueError(
+                f"Multiple policy identities exist for {lang}/{corpus}"
+            )
+        return rows[0] if rows else None
+
+    def _candidate_v2_sql(
+        self,
+        *,
+        dataset,
+        lang: str,
+        corpus: str,
+        min_count: int,
+        n: int,
+        min_norm_len: int,
+        max_norm_len: int,
+        counts_source: str,
+    ) -> tuple[str, list]:
+        dataset_id, status, generation = dataset
+        if status != "complete" or generation is None:
+            raise RuntimeError(f"N-gram dataset is incomplete: {dataset_id}")
+        if counts_source == "raw":
+            raise RuntimeError("Raw v2 staging is retired after finalization")
+        where = ["dataset_id = ?", "generation = ?", "count >= ?"]
+        params = [lang, corpus, dataset_id, generation, min_count]
+        if n:
+            where.append("n = ?")
+            params.append(n)
+        if min_norm_len:
+            where.append("length(norm_key) >= ?")
+            params.append(min_norm_len)
+        if max_norm_len:
+            where.append("length(norm_key) <= ?")
+            params.append(max_norm_len)
+        return (
+            f"""
+            SELECT ? AS lang, ? AS corpus, surface_display AS text, n,
+                   count AS total_count, norm_key, has_punctuation
+            FROM {V2_COUNTS_TABLE}
+            WHERE {" AND ".join(where)}
+            """,
+            params,
+        )
+
     def _counts_table(self, policy: SearchPolicy) -> str:
         if policy.counts_source == "raw":
             return RAW_COUNTS_TABLE
         if policy.counts_source == "compact":
             return TOTAL_COUNTS_TABLE
         if policy.counts_source != "auto":
-            raise ValueError("counts_source must be one of: auto, raw, compact")
+            raise ValueError(
+                "counts_source must be one of: auto, raw, compact"
+            )
 
         source_compacted = self._has_usable_compaction(
             lang=policy.source_lang,
@@ -306,9 +424,7 @@ class DuckDbSemordnilapSearchRepository:
 
         where_clause = " AND ".join(where)
         punctuation_expression = (
-            "has_punctuation"
-            if table in self._punctuation_tables
-            else "false"
+            "has_punctuation" if table in self._punctuation_tables else "false"
         )
         if table == TOTAL_COUNTS_TABLE:
             return (
@@ -322,9 +438,7 @@ class DuckDbSemordnilapSearchRepository:
             )
 
         punctuation_group = (
-            ", has_punctuation"
-            if table in self._punctuation_tables
-            else ""
+            ", has_punctuation" if table in self._punctuation_tables else ""
         )
         return (
             f"""

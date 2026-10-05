@@ -66,7 +66,7 @@ STOPWORDS = {
         "sus",
         "un",
         "una",
-            "y",
+        "y",
     },
     "fr": {
         "à",

@@ -1,2 +1,1 @@
 """Semordnilap search tools."""
-

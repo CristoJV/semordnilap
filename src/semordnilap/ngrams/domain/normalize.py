@@ -6,6 +6,8 @@ import unicodedata
 
 from semordnilap.utils.text import normalize_compact_text
 
+NORMALIZATION_VERSION = "unicode-nfc-casefold-v2"
+
 
 def normalize_ngram(text: str, *, fold_nasal_letters: bool = False) -> str:
     """Build the letters-only compact semordnilap comparison key."""
@@ -21,6 +23,4 @@ def normalize_ngram(text: str, *, fold_nasal_letters: bool = False) -> str:
 
 def has_punctuation(text: str) -> bool:
     """Return whether text contains any Unicode punctuation character."""
-    return any(
-        unicodedata.category(char).startswith("P") for char in text
-    )
+    return any(unicodedata.category(char).startswith("P") for char in text)

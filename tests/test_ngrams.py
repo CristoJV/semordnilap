@@ -83,8 +83,8 @@ def test_extraction_can_retain_punctuation_without_counting_it_as_a_token():
     )
 
     assert counts[ExtractedNgram(("niña", "el"), "niña, el")] == 1
-    assert counts[ExtractedNgram(("niña",), "niña,")] == 1
-    assert counts[ExtractedNgram(("perro",), "perro.")] == 1
+    assert counts[ExtractedNgram(("niña",), "niña")] == 1
+    assert counts[ExtractedNgram(("perro",), "perro")] == 1
 
     row = build_ngram_count(
         ("niña,", "el"),
@@ -96,17 +96,34 @@ def test_extraction_can_retain_punctuation_without_counting_it_as_a_token():
     assert row.text == "niña, el"
     assert row.tokens == ("niña", "el")
     assert row.n == 2
-    assert row.norm_key == "ninael"
+    assert row.norm_key == "niñael"
     assert row.has_punctuation is True
 
 
-def test_extraction_omits_punctuation_by_default():
+def test_extraction_crosses_punctuation_by_default():
     counts = extract_counts_from_text(
         "La niña, el perro.",
         NgramExtractionPolicy(lang="es", max_n=2),
     )
 
-    assert ("niña", "el") not in counts
+    assert ExtractedNgram(("niña", "el"), "niña, el") in counts
+
+
+def test_normalization_v2_preserves_nasal_n_unless_explicitly_folded():
+    assert normalize_ngram("niña") == "niña"
+    assert normalize_ngram("niña", fold_nasal_letters=True) == "nina"
+    assert normalize_ngram("coração") == "coracao"
+
+
+def test_unicode_tokenizer_keeps_apostrophe_and_hyphen_words():
+    counts = extract_counts_from_text(
+        "D'Artagnan fala co-operar.",
+        NgramExtractionPolicy(lang="gl", max_n=1),
+    )
+
+    tokens = {ngram.tokens for ngram in counts}
+    assert ("d'artagnan",) in tokens
+    assert ("co-operar",) in tokens
 
 
 def collect_counts(opts, db_path):
@@ -121,7 +138,7 @@ def collect_counts(opts, db_path):
     return counts
 
 
-def test_count_corpus_does_not_cross_sentence_boundaries(tmp_path):
+def test_count_corpus_crosses_sentence_boundaries_by_default(tmp_path):
     corpus = tmp_path / "corpus.txt"
     corpus.write_text("La casa. El camino\n", encoding="utf-8")
 
@@ -129,7 +146,7 @@ def test_count_corpus_does_not_cross_sentence_boundaries(tmp_path):
 
     counts = collect_counts(opts, tmp_path / "ngrams.duckdb")
 
-    assert ("casa", "el") not in counts
+    assert ("casa", "el") in counts
     assert counts[("la", "casa")] == 1
     assert counts[("el", "camino")] == 1
 
@@ -150,7 +167,7 @@ def test_export_ngrams_writes_expected_tsv(tmp_path):
         rows = list(csv.DictReader(f, delimiter="\t"))
 
     assert any(
-        row["text"] == "à dor" and row["norm_key"] == "ador" for row in rows
+        row["text"] == "À dor" and row["norm_key"] == "ador" for row in rows
     )
     assert normalize_ngram("coração") == "coracao"
 
@@ -173,7 +190,9 @@ def test_extraction_supports_english_french_and_galician():
 
     for lang, text, expected in examples:
         counts = extract_counts_for_lang(text, lang)
-        assert expected in counts
+        assert any(
+            getattr(ngram, "tokens", ngram) == expected for ngram in counts
+        )
 
 
 def extract_counts_for_lang(text, lang):
@@ -221,7 +240,7 @@ def test_extract_subcommand_counts_without_exporting():
     assert command.input_path.name == "corpus.jsonl"
     assert command.export_after_count is False
     assert command.compact_after_count is True
-    assert command.policy.omit_punctuation is True
+    assert command.policy.omit_punctuation is False
 
 
 def test_extract_subcommand_can_keep_punctuation():
@@ -256,16 +275,14 @@ def test_punctuation_metadata_is_persisted_and_exported(tmp_path):
 
     repository = DuckDbNgramCountRepository(tmp_path / "ngrams.duckdb")
     count_corpus(opts, repository)
-    rows = list(
-        repository.iter_counts(lang="es", corpus="test", min_count=1)
-    )
+    rows = list(repository.iter_counts(lang="es", corpus="test", min_count=1))
     export_tsv(opts, repository)
     repository.close()
 
     punctuated = next(row for row in rows if row.text == "niña, el")
     assert punctuated.has_punctuation is True
     assert punctuated.n == 2
-    assert punctuated.norm_key == "ninael"
+    assert punctuated.norm_key == "niñael"
 
     with output.open("r", encoding="utf-8", newline="") as f:
         exported = list(csv.DictReader(f, delimiter="\t"))
@@ -349,7 +366,7 @@ def test_reset_recomputes_lang_corpus_counts(tmp_path):
     )
     reset = collect_counts(reset_opts, db_path)
 
-    assert doubled[("la", "casa")] == 2
+    assert doubled[("la", "casa")] == 1
     assert reset[("la", "casa")] == 1
 
 
@@ -624,6 +641,8 @@ def test_stats_include_filtered_table_counts(tmp_path):
         "ngram_compactions": 0,
         "ngram_counts": 0,
         "ngram_totals": 0,
+        "ngram_upos_counts": 0,
+        "ngram_upos_totals": 0,
     }
     assert global_counts["ngram_counts"] == 2
     assert global_counts["ngram_totals"] == 1
@@ -668,10 +687,13 @@ def test_run_extraction_compacts_after_count(tmp_path):
     stats = repository.stats(lang="es", corpus="test")
     repository.close()
 
-    compacted_n = {row[2] for row in stats["compacted"]}
+    datasets = stats["v2_datasets"]
+    table_counts = dict(stats["v2_table_counts"])
 
     assert exported > 0
-    assert compacted_n == {1, 2}
+    assert datasets[0][6] == "complete"
+    assert table_counts["ngram_stage_v2"] == 0
+    assert table_counts["ngram_final_v2"] > 0
 
 
 def test_compact_all_counts_runs_progressively(tmp_path):

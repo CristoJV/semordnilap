@@ -1,14 +1,23 @@
-"""Lightweight corpus tokenization for Latin-script corpora."""
+"""Streaming Unicode tokenization shared by corpus adapters."""
 
 from __future__ import annotations
 
 import re
 import unicodedata
+from collections import deque
 from collections.abc import Iterator
+from dataclasses import dataclass
 
-from semordnilap.utils.text import clean_corpus_text
+from semordnilap.utils.text import canonical_surface, clean_corpus_text
 
-TOKEN_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿĀ-ſ]+")
+TOKEN_RE = re.compile(r"[^\W\d_]+(?:[-'’ʼ][^\W\d_]+)*", re.UNICODE)
+
+
+@dataclass(frozen=True)
+class LexicalMatch:
+    text: str
+    start: int
+    end: int
 
 
 def iter_sentence_chunks(text: str):
@@ -29,39 +38,35 @@ def iter_sentence_chunks(text: str):
 
 
 def is_letter_token(token: str) -> bool:
-    return all(unicodedata.category(c).startswith("L") for c in token)
+    return bool(TOKEN_RE.fullmatch(unicodedata.normalize("NFC", token)))
+
+
+def iter_lexical_matches(text: str) -> Iterator[LexicalMatch]:
+    for match in TOKEN_RE.finditer(text):
+        yield LexicalMatch(match.group(0), match.start(), match.end())
 
 
 def tokenize_sentence(sentence: str) -> list[str]:
-    tokens = []
-    for match in TOKEN_RE.finditer(sentence.lower()):
-        token = match.group(0)
-        if is_letter_token(token):
-            tokens.append(token)
-    return tokens
+    cleaned = clean_corpus_text(sentence)
+    return [match.text.casefold() for match in iter_lexical_matches(cleaned)]
 
 
 def iter_text_windows(
     text: str, max_size: int
-) -> Iterator[tuple[tuple[str, ...], str]]:
-    """Yield lexical tokens and their punctuation-preserving surface.
-
-    Punctuation is retained verbatim in the cleaned surface, but never becomes
-    a token or contributes to n-gram size.
-    """
+) -> Iterator[tuple[tuple[str, ...], str, str]]:
+    """Yield lexical tokens, canonical key and display surface incrementally."""
     cleaned = clean_corpus_text(text)
-    matches = list(TOKEN_RE.finditer(cleaned))
-
-    for size in range(1, max_size + 1):
-        for start in range(0, len(matches) - size + 1):
-            window = matches[start : start + size]
-            tokens = tuple(match.group(0).lower() for match in window)
-            surface_start = 0 if start == 0 else window[0].start()
-            next_index = start + size
-            surface_end = (
-                matches[next_index].start()
-                if next_index < len(matches)
-                else len(cleaned)
+    recent: deque[LexicalMatch] = deque(maxlen=max_size)
+    for match in iter_lexical_matches(cleaned):
+        recent.append(match)
+        window = tuple(recent)
+        for size in range(1, len(window) + 1):
+            suffix = window[-size:]
+            display = " ".join(
+                cleaned[suffix[0].start : suffix[-1].end].split()
             )
-            surface = cleaned[surface_start:surface_end].strip().lower()
-            yield tokens, surface
+            yield (
+                tuple(item.text.casefold() for item in suffix),
+                canonical_surface(display),
+                display,
+            )

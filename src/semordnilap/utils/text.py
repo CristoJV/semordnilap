@@ -10,7 +10,6 @@ ACCENT_MARKS = {
     "\u0301",  # acute
     "\u0300",  # grave
     "\u0302",  # circumflex
-    "\u0303",  # tilde
     "\u0308",  # diaeresis
 }
 URL_RE = re.compile(r"https?://\S+|www\.\S+")
@@ -21,8 +20,14 @@ TRAILING_SENTENCE_PUNCTUATION = ".!?;:…"
 
 def strip_accents(text: str) -> str:
     decomposed = unicodedata.normalize("NFD", text)
-    stripped = "".join(c for c in decomposed if c not in ACCENT_MARKS)
-    return unicodedata.normalize("NFC", stripped)
+    stripped = []
+    for char in decomposed:
+        if char in ACCENT_MARKS:
+            continue
+        if char == "\u0303" and (not stripped or stripped[-1] not in "nN"):
+            continue
+        stripped.append(char)
+    return unicodedata.normalize("NFC", "".join(stripped))
 
 
 def remove_urls(text: str) -> str:
@@ -56,8 +61,13 @@ def normalize_compact_text(
     text: str, *, fold_nasal_letters: bool = False
 ) -> str:
     """Build a compact key: lowercase, de-accented, no whitespace."""
-    normalized = strip_accents(text.lower())
+    normalized = strip_accents(text.casefold())
     normalized = normalized.replace("ç", "c")
     if fold_nasal_letters:
         normalized = normalized.replace("ñ", "n")
     return "".join(c for c in normalized if not c.isspace())
+
+
+def canonical_surface(text: str) -> str:
+    """Canonical textual n-gram identity, preserving punctuation."""
+    return normalize_spacing(unicodedata.normalize("NFC", text)).casefold()

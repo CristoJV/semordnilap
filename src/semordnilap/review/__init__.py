@@ -1,2 +1,0 @@
-"""Semordnilap review interfaces."""
-

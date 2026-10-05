@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from semordnilap!")
+"""Contextual corpus tagging and semordnilap n-gram extraction."""

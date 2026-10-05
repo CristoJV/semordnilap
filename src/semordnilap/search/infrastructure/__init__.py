@@ -5,4 +5,3 @@ from semordnilap.search.infrastructure.duckdb_repository import (
 )
 
 __all__ = ["DuckDbSemordnilapSearchRepository"]
-
