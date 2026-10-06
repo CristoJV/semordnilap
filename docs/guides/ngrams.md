@@ -91,6 +91,13 @@ uv run sp_ngrams export --db-path DB --lang es --corpus wiki \
 uv run sp_ngrams db delete --db-path DB --lang es --corpus wiki
 ```
 
+`db stats` funciona también como inventario: muestra todas las tablas físicas
+y su función, los aliases `lang/corpus` disponibles, almacenamiento legacy o
+por generaciones, estado de cada dataset y recuentos por `n`. Aunque un filtro
+no encuentre datos, conserva el catálogo global y propone usar uno de sus
+aliases exactos. `--verbose` añade las filas raw más frecuentes y todas las
+identidades de generación.
+
 La exportación usa un archivo parcial, checksum y promoción atómica. Las
 tablas legacy `ngram_counts` y `ngram_totals` siguen disponibles para bases
 migradas y para las operaciones directas de compatibilidad.

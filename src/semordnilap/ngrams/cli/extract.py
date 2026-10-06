@@ -229,14 +229,17 @@ def build_argparser() -> argparse.ArgumentParser:
 
     stats_parser = db_subparsers.add_parser(
         "stats",
-        help="Print DuckDB n-gram storage statistics.",
+        help=(
+            "Inventory DuckDB tables, available collections, datasets and "
+            "n-gram counts."
+        ),
     )
     add_db_path(stats_parser)
     add_lang_corpus(stats_parser, lang_required=False, corpus_default=None)
     stats_parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Include detailed diagnostic rows such as top raw partial rows.",
+        help=("Include top raw rows and every generation dataset identity."),
     )
 
     delete_parser = db_subparsers.add_parser(
@@ -429,14 +432,6 @@ def log_stats(repository: DuckDbNgramCountRepository, args) -> None:
         corpus=args.corpus,
         include_top_rows=args.verbose,
     )
-    compacted_at = {
-        (row[0], row[1], row[2]): row[3] for row in stats["compacted"]
-    }
-    totals_by_n = {
-        (row[0], row[1], row[2]): (row[3], row[4])
-        for row in stats["totals_by_n"]
-    }
-
     lines = [
         "N-gram DuckDB stats",
         f"schema_version: {stats['schema_version']}",
@@ -449,21 +444,136 @@ def log_stats(repository: DuckDbNgramCountRepository, args) -> None:
     if filters:
         lines.append(f"filters: {' '.join(filters)}")
 
-    if stats["by_lang_corpus"]:
-        lines.append("scope:")
-        for lang, corpus, raw_rows, raw_occurrences, unique_texts in stats[
-            "by_lang_corpus"
-        ]:
-            lines.append(
-                f"- {lang}/{corpus}: raw_rows={format_number(raw_rows)} "
-                f"raw_occurrences={format_number(raw_occurrences)} "
-                f"approx_unique_raw_texts={format_number(unique_texts)}"
+    table_roles = {
+        "semordnilap_schema": "schema history",
+        "ngram_counts": "legacy raw partial counts",
+        "ngram_totals": "legacy compacted counts",
+        "ngram_compactions": "legacy compaction registry",
+        "extraction_datasets": "generation dataset registry",
+        "extraction_runs": "generation run checkpoints",
+        "extraction_chunks": "committed chunk ledger",
+        "ngram_stage_v2": "generation staging counts",
+        "ngram_final_v2": "active/final generation counts",
+    }
+    lines.append("database tables:")
+    for table, columns, rows in stats["table_inventory"]:
+        role = table_roles.get(table, "application table")
+        lines.append(
+            f"- {table}: rows={format_number(rows)} columns={columns} "
+            f"role={role}"
+        )
+
+    legacy_catalog = {
+        (row[0], row[1]): row[2:] for row in stats["legacy_collections"]
+    }
+    generation_catalog = {
+        (row[0], row[1]): row[2:] for row in stats["generation_collections"]
+    }
+    available_keys = sorted(legacy_catalog.keys() | generation_catalog.keys())
+    if available_keys:
+        lines.append("available collections (lang/corpus):")
+        for lang, corpus in available_keys:
+            details = []
+            legacy = legacy_catalog.get((lang, corpus))
+            if legacy:
+                has_raw, has_compact, n_values, last_compacted = legacy
+                locations = []
+                if has_raw:
+                    locations.append("raw")
+                if has_compact:
+                    locations.append("compact")
+                n_text = ",".join(str(n) for n in n_values) or "none"
+                details.append(
+                    f"legacy={'+'.join(locations) or 'registry-only'} "
+                    f"compacted_n={n_text} "
+                    f"last_compacted={last_compacted or 'never'}"
+                )
+            generation = generation_catalog.get((lang, corpus))
+            if generation:
+                datasets, complete, active, latest = generation
+                details.append(
+                    f"generations={datasets} complete={complete} "
+                    f"in_progress={active} latest={latest}"
+                )
+            lines.append(f"- {lang}/{corpus}: {'; '.join(details)}")
+
+    raw_by_collection = {
+        (row[0], row[1]): row[2:] for row in stats["by_lang_corpus"]
+    }
+    compact_by_collection = {}
+    totals_by_n = {}
+    for lang, corpus, n, rows, occurrences in stats["totals_by_n"]:
+        totals_by_n[(lang, corpus, n)] = (rows, occurrences)
+        summary = compact_by_collection.setdefault((lang, corpus), [0, 0])
+        summary[0] += rows or 0
+        summary[1] += occurrences or 0
+    compacted_at = {
+        (row[0], row[1], row[2]): row[3] for row in stats["compacted"]
+    }
+    matching_keys = sorted(
+        raw_by_collection.keys()
+        | compact_by_collection.keys()
+        | {(row[0], row[1]) for row in stats["compacted"]}
+        | {(row[1], row[2]) for row in stats["generation_by_n"]}
+        | {(row[3], row[4]) for row in stats["v2_datasets"]}
+    )
+    if matching_keys:
+        lines.append("matching selection:")
+        for lang, corpus in matching_keys:
+            values = []
+            raw = raw_by_collection.get((lang, corpus))
+            if raw:
+                raw_rows, raw_occurrences, unique_texts = raw
+                values.append(
+                    f"raw_rows={format_number(raw_rows)} "
+                    f"raw_occurrences={format_number(raw_occurrences)} "
+                    f"approx_unique_raw_texts={format_number(unique_texts)}"
+                )
+            compact = compact_by_collection.get((lang, corpus))
+            if compact:
+                values.append(
+                    f"compact_rows={format_number(compact[0])} "
+                    f"compact_occurrences={format_number(compact[1])}"
+                )
+            generation_rows = sum(
+                row[4]
+                for row in stats["generation_by_n"]
+                if (row[1], row[2]) == (lang, corpus)
             )
+            generation_occurrences = sum(
+                row[5]
+                for row in stats["generation_by_n"]
+                if (row[1], row[2]) == (lang, corpus)
+            )
+            if generation_rows:
+                values.append(
+                    f"generation_rows={format_number(generation_rows)} "
+                    "generation_occurrences="
+                    f"{format_number(generation_occurrences)}"
+                )
+            if not values:
+                has_generation_metadata = any(
+                    (row[3], row[4]) == (lang, corpus)
+                    for row in stats["v2_datasets"]
+                )
+                if has_generation_metadata:
+                    values.append(
+                        "generation metadata present; no active final count "
+                        "rows"
+                    )
+                else:
+                    values.append("compaction registry present; no count rows")
+            lines.append(f"- {lang}/{corpus}: {'; '.join(values)}")
     else:
-        lines.append("scope: no raw rows found")
+        lines.append("matching selection: no data matched all filters")
+        if filters and available_keys:
+            lines.append(
+                "hint: choose one of the exact lang/corpus aliases listed "
+                "under available collections"
+            )
 
     if stats["v2_datasets"]:
-        lines.append("immutable datasets:")
+        lines.append("matching immutable datasets:")
         for (
             dataset_id,
             artifact_id,
@@ -480,17 +590,14 @@ def log_stats(repository: DuckDbNgramCountRepository, args) -> None:
                 f"sample={sample} status={status} "
                 f"generation={generation}"
             )
-        v2_counts = ", ".join(
-            f"{name}={format_number(rows)}"
-            for name, rows in stats["v2_table_counts"]
-        )
-        lines.append(f"generation storage: {v2_counts}")
-
-    if stats["by_n"]:
-        lines.append("by n:")
-        for lang, corpus, n, raw_rows, raw_occurrences, unique_texts in stats[
-            "by_n"
-        ]:
+    raw_by_n = {(row[0], row[1], row[2]): row[3:] for row in stats["by_n"]}
+    n_keys = sorted(raw_by_n.keys() | totals_by_n.keys() | compacted_at.keys())
+    if n_keys:
+        lines.append("matching legacy counts by n:")
+        for lang, corpus, n in n_keys:
+            raw_rows, raw_occurrences, unique_texts = raw_by_n.get(
+                (lang, corpus, n), (0, 0, 0)
+            )
             total_rows, total_occurrences = totals_by_n.get(
                 (lang, corpus, n), (0, 0)
             )
@@ -505,22 +612,28 @@ def log_stats(repository: DuckDbNgramCountRepository, args) -> None:
                 f"compacted_at={compacted}"
             )
 
+    if stats["generation_by_n"]:
+        lines.append("matching generation counts by n:")
+        for dataset_id, lang, corpus, n, rows, occurrences in stats[
+            "generation_by_n"
+        ]:
+            lines.append(
+                f"- {lang}/{corpus} dataset_id={dataset_id} n={n}: "
+                f"rows={format_number(rows)} "
+                f"occurrences={format_number(occurrences)}"
+            )
+
     if stats["filtered_table_counts"]:
         filtered_table_counts = ", ".join(
             f"{name}={format_number(rows)}"
             for name, rows in stats["filtered_table_counts"]
         )
         if filters:
-            lines.append(f"matching rows: {filtered_table_counts}")
+            lines.append(
+                f"matching legacy table rows: {filtered_table_counts}"
+            )
         else:
-            lines.append(f"tables: {filtered_table_counts}")
-
-    if filters and stats["table_counts"]:
-        table_counts = ", ".join(
-            f"{name}={format_number(rows)}"
-            for name, rows in stats["table_counts"]
-        )
-        lines.append(f"database totals: {table_counts}")
+            lines.append(f"legacy table rows: {filtered_table_counts}")
 
     if args.verbose and stats["top_partial_rows"]:
         lines.append("top raw partial rows:")
@@ -530,6 +643,30 @@ def log_stats(repository: DuckDbNgramCountRepository, args) -> None:
             lines.append(
                 f"- {lang}/{corpus} n={n} count={format_number(count)} "
                 f"text={text!r} norm_key={norm_key}"
+            )
+
+    if args.verbose and stats["all_v2_datasets"]:
+        lines.append("all generation dataset identities:")
+        for row in stats["all_v2_datasets"]:
+            (
+                dataset_id,
+                artifact_id,
+                policy_hash,
+                lang,
+                corpus,
+                input_format,
+                sample,
+                status,
+                generation,
+                created_at,
+                completed_at,
+            ) = row
+            lines.append(
+                f"- {lang}/{corpus}: dataset_id={dataset_id} "
+                f"artifact_id={artifact_id} policy_hash={policy_hash} "
+                f"format={input_format} sample={sample} status={status} "
+                f"generation={generation} created_at={created_at} "
+                f"completed_at={completed_at}"
             )
 
     logger.info("\n%s", "\n".join(lines))

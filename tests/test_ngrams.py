@@ -1,10 +1,16 @@
 import csv
+import logging
 from collections import Counter
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
-from semordnilap.ngrams.cli.extract import build_argparser, command_from_args
+from semordnilap.ngrams.cli.extract import (
+    build_argparser,
+    command_from_args,
+    log_stats,
+)
 from semordnilap.ngrams.application import (
     ExtractNgramsCommand,
     count_corpus,
@@ -674,6 +680,41 @@ def test_stats_include_filtered_table_counts(tmp_path):
     assert global_counts["ngram_totals"] == 1
     assert global_counts["ngram_compactions"] == 1
     assert global_stats["schema_version"] == 3
+    assert [row[:2] for row in stats["legacy_collections"]] == [
+        ("en", "test"),
+        ("es", "test"),
+    ]
+    inventory = {row[0]: row[1:] for row in stats["table_inventory"]}
+    assert inventory["ngram_counts"][1] == 2
+    assert inventory["ngram_totals"][1] == 1
+
+
+def test_stats_output_lists_available_collections_when_filter_misses(
+    tmp_path, caplog
+):
+    repository = DuckDbNgramCountRepository(tmp_path / "ngrams.duckdb")
+    repository.add_counts(
+        Counter({("casa",): 2}),
+        lang="es",
+        corpus="wikisource_20231201",
+        fold_nasal_letters=False,
+    )
+    repository.compact_counts(lang="es", corpus="wikisource_20231201", n=1)
+    caplog.set_level(logging.INFO, logger="semordnilap.ngrams.cli.extract")
+
+    log_stats(
+        repository,
+        SimpleNamespace(lang="gl", corpus="missing", verbose=False),
+    )
+    repository.close()
+
+    output = caplog.text
+    assert "database tables:" in output
+    assert "available collections (lang/corpus):" in output
+    assert "es/wikisource_20231201" in output
+    assert "compacted_n=1" in output
+    assert "matching selection: no data matched all filters" in output
+    assert "choose one of the exact lang/corpus aliases" in output
 
 
 def test_export_auto_uses_complete_compaction_for_all_n(tmp_path):
@@ -721,6 +762,9 @@ def test_run_extraction_compacts_after_count(tmp_path):
     assert datasets[0][6] == "complete"
     assert table_counts["ngram_stage_v2"] == 0
     assert table_counts["ngram_final_v2"] > 0
+    assert stats["generation_collections"][0][:2] == ("es", "test")
+    assert stats["generation_by_n"]
+    assert {row[3] for row in stats["generation_by_n"]} == {1, 2}
 
 
 def test_compact_all_counts_runs_progressively(tmp_path):

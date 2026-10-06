@@ -1122,8 +1122,43 @@ class DuckDbNgramCountRepository:
             params,
         ).fetchall()
 
+        legacy_collections = self._con.execute(
+            """
+            WITH locations AS (
+                SELECT DISTINCT lang, corpus, 'raw' AS location
+                FROM ngram_counts
+                UNION ALL
+                SELECT DISTINCT lang, corpus, 'compact' AS location
+                FROM ngram_totals
+                UNION ALL
+                SELECT DISTINCT lang, corpus, 'compaction' AS location
+                FROM ngram_compactions
+            ), collection_flags AS (
+                SELECT lang, corpus,
+                       bool_or(location = 'raw') AS has_raw,
+                       bool_or(location = 'compact') AS has_compact
+                FROM locations
+                GROUP BY lang, corpus
+            ), compacted_n AS (
+                SELECT lang, corpus,
+                       list(n ORDER BY n) AS n_values,
+                       MAX(compacted_at) AS last_compacted_at
+                FROM ngram_compactions
+                GROUP BY lang, corpus
+            )
+            SELECT f.lang, f.corpus, f.has_raw, f.has_compact,
+                   COALESCE(c.n_values, []), c.last_compacted_at
+            FROM collection_flags f
+            LEFT JOIN compacted_n c USING (lang, corpus)
+            ORDER BY f.lang, f.corpus
+            """
+        ).fetchall()
+
         v2_datasets = []
         v2_table_counts = []
+        generation_collections = []
+        all_v2_datasets = []
+        generation_by_n = []
         if self._has_generation_schema:
             v2_datasets = self._con.execute(
                 """
@@ -1143,6 +1178,41 @@ class DuckDbNgramCountRepository:
                 UNION ALL
                 SELECT 'extraction_chunks', COUNT(*) FROM extraction_chunks
                 """
+            ).fetchall()
+            generation_collections = self._con.execute(
+                """
+                SELECT lang, corpus, COUNT(*) AS datasets,
+                       count_if(status = 'complete') AS complete_datasets,
+                       count_if(status = 'in_progress') AS active_datasets,
+                       MAX(created_at) AS latest_created_at
+                FROM extraction_datasets
+                GROUP BY lang, corpus
+                ORDER BY lang, corpus
+                """
+            ).fetchall()
+            all_v2_datasets = self._con.execute(
+                """
+                SELECT dataset_id, artifact_id, policy_hash, lang, corpus,
+                       input_format, sample, status, active_generation,
+                       created_at, completed_at
+                FROM extraction_datasets
+                ORDER BY lang, corpus, created_at
+                """
+            ).fetchall()
+            generation_by_n = self._con.execute(
+                f"""
+                SELECT d.dataset_id, d.lang, d.corpus, f.n,
+                       COUNT(*) AS rows, SUM(f.count) AS occurrences
+                FROM extraction_datasets d
+                JOIN {V2_FINAL_TABLE} f
+                  ON f.dataset_id = d.dataset_id
+                 AND f.generation = d.active_generation
+                WHERE (? IS NULL OR d.lang = ?)
+                  AND (? IS NULL OR d.corpus = ?)
+                GROUP BY d.dataset_id, d.lang, d.corpus, f.n
+                ORDER BY d.lang, d.corpus, d.dataset_id, f.n
+                """,
+                [lang, lang, corpus, corpus],
             ).fetchall()
 
         by_n = self._con.execute(
@@ -1233,8 +1303,30 @@ class DuckDbNgramCountRepository:
             params,
         ).fetchall()
 
+        table_inventory = []
+        physical_tables = self._con.execute(
+            """
+            SELECT table_name, COUNT(column_name) AS columns
+            FROM information_schema.columns
+            WHERE table_schema = 'main'
+            GROUP BY table_name
+            ORDER BY table_name
+            """
+        ).fetchall()
+        for table_name, columns in physical_tables:
+            identifier = table_name.replace('"', '""')
+            rows = self._con.execute(
+                f'SELECT COUNT(*) FROM "{identifier}"'
+            ).fetchone()[0]
+            table_inventory.append((table_name, columns, rows))
+
         return {
             "schema_version": self._schema_version,
+            "legacy_collections": legacy_collections,
+            "generation_collections": generation_collections,
+            "all_v2_datasets": all_v2_datasets,
+            "generation_by_n": generation_by_n,
+            "table_inventory": table_inventory,
             "by_lang_corpus": by_lang_corpus,
             "by_n": by_n,
             "totals_by_n": totals_by_n,
