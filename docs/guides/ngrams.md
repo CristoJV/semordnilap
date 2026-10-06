@@ -1,100 +1,96 @@
 # N-gramas y DuckDB
 
+## Contrato textual
+
+`sp_ngrams` extrae directamente texto fuente. No necesita Stanza, no crea un
+dataset etiquetado y no acepta `ud-jsonl`. Cada fila lógica contiene:
+
+- `lang`, `corpus`, `text`, `n` y `count`;
+- `norm_key`, usado para la búsqueda normalizada;
+- `has_punctuation`, calculado a partir de la superficie almacenada.
+
+La puntuación y los saltos de frase se pueden cruzar por defecto, pero nunca
+se cruzan documentos. No se conserva un campo independiente de cruce de frase.
+`--omit-punctuation` mantiene el modo compatible que trata la puntuación como
+límite.
+
 ## Identidad e idempotencia
 
-La clave real de un dataset es
+La identidad de un dataset deriva de
 `source artifact_id + extraction policy hash + lang + corpus`. La política
 incluye normalización, superficie, límites, puntuación, `limit_docs` y, para
-fuentes gestionadas, el adaptador seleccionado.
-`lang/corpus` es sólo un alias legible.
+fuentes gestionadas, el adaptador seleccionado. `lang/corpus` es un alias
+legible; si corresponde a varias identidades hay que indicar `--dataset-id`.
+
+La extracción mantiene como máximo el contador configurado con
+`--flush-unique-ngrams`. Cada segmento se confirma junto con su ledger y el
+cursor en una transacción. Repetir un segmento idéntico es un no-op; reutilizar
+su ID con otro digest falla. La finalización agrega y activa una generación
+textual de forma atómica.
 
 ## Adaptadores de corpus fuente
 
-`extract` procesa directamente los shards descargados, sin Stanza ni un
-dataset etiquetado intermedio. `--lang` sigue siendo obligatorio para que la
-política lingüística sea explícita. `--adapter auto` es el valor por defecto,
-pero puede fijarse el adaptador en operaciones reproducibles:
+`--adapter auto` reconoce manifiestos gestionados. También se puede fijar el
+adaptador para dejar la operación reproducible:
 
 ```bash
-# el manifest de colección selecciona sólo el artefacto español
 uv run sp_ngrams extract --adapter wikisource \
   --input data/corpus/wikisource --lang es \
   --db-path data/ngrams/counts.duckdb
 
-# procesa la colección completa de configuraciones descargadas
 uv run sp_ngrams extract --adapter corpusnos \
   --input data/corpus/corpusnos --lang gl \
   --db-path data/ngrams/counts.duckdb
 
-# procesa una única configuración CorpusNÓS
 uv run sp_ngrams extract --adapter corpusnos \
   --input data/corpus/corpusnos/corpusnos_dta_books --lang gl \
   --db-path data/ngrams/counts.duckdb
 ```
 
-Wikisource deriva por defecto un alias como `wikisource_20231201`; un
-artefacto CorpusNÓS individual usa `corpusnos_<config>` y la colección usa
-`corpusnos`. `--corpus NOMBRE` permite sustituirlos. El adaptador raw genérico
-permanece disponible con `--adapter raw` y las opciones `--format` y
-`--text-field` existentes.
+Wikisource deriva un alias como `wikisource_20231201`; CorpusNÓS usa
+`corpusnos` para la colección o `corpusnos_<config>` para un artefacto.
+`--corpus NOMBRE` los sustituye. Para entradas no gestionadas use
+`--adapter raw` junto con `--format txt|jsonl` y `--text-field`.
 
-La ruta directa genera recuentos textuales, pero no UPOS:
-`upos_counts` queda vacío y `cross_sentence_count` vale cero. Use una entrada
-`ud-jsonl` etiquetada sólo cuando necesite esa evidencia contextual.
+## Esquema DuckDB v3 y migración
 
-La extracción genera ventanas mediante iteradores y mantiene como máximo el
-buffer configurado con `--flush-unique-ngrams`, incluso dentro de un único
-documento grande. Cada flush recibe un `chunk_id` y digest deterministas. En
-una transacción se escriben:
+Las bases nuevas usan el esquema 3. Las tablas de generaciones conservan sus
+nombres `ngram_stage_v2` y `ngram_final_v2` para no reescribir datos textuales
+existentes; el número de versión describe el contrato completo de la base, no
+el sufijo histórico de esas tablas.
 
-- recuentos textuales de staging;
-- patrones UPOS y si cruzan frase;
-- ledger del chunk;
-- métricas y cursor del run.
-
-Reproducir un chunk idéntico no cambia ningún total; el mismo ID con otro
-digest falla.
-
-## Generaciones finales
-
-Al finalizar, DuckDB agrega una generación nueva, valida que el total textual
-y el total UPOS coincidan, activa la generación y retira staging dentro de una
-transacción. Los lectores nunca consumen una generación incompleta.
-
-Las tablas antiguas `ngram_counts`/`ngram_totals` se conservan sólo para leer y
-migrar bases existentes. Una base legacy se migra explícitamente:
+Una base anterior no se modifica al abrirla. La migración debe solicitarse:
 
 ```bash
 uv run sp_ngrams db migrate --db-path data/ngrams/counts.duckdb
 ```
 
-`db stats` siempre abre en sólo lectura y no ejecuta migraciones.
+La migración es transaccional e idempotente:
 
-## Superficie y normalización
+- v0/v1 conserva los recuentos y añade `has_punctuation=false`;
+- v2 conserva recuentos, generaciones y ledgers textuales;
+- elimina `ngram_upos_counts`, `ngram_upos_totals`,
+  `ngram_upos_stage_v2` y `ngram_upos_final_v2`;
+- rechaza una versión futura que el programa no conozca.
 
-- Puntuación y saltos de frase se cruzan por defecto.
-- `surface_display` conserva una grafía de origen con espacios normalizados.
-- `surface_key` usa NFC, case-folding Unicode y espacios colapsados.
-- `norm_key` elimina puntuación y acentos para la inversión.
-- `ñ` permanece distinta; `--fold-nasal-letters` activa `ñ -> n`.
-- Una misma superficie tiene un total único y una distribución separada de
-  patrones, por ejemplo `{"ADP DET":73,"VERB DET":4}`.
+La eliminación de las cuatro tablas UPOS es intencionada. Conviene hacer una
+copia de la base antes de migrar si esos datos gramaticales deben conservarse
+fuera de Semordnilap.
 
-## Operaciones
+## Exportación y mantenimiento
+
+El TSV actual tiene versión 2 y columnas `lang`, `corpus`, `text`, `n`,
+`count`, `score`, `norm_key` y `has_punctuation`.
 
 ```bash
-# inspección
 uv run sp_ngrams db stats --db-path DB --lang es --corpus wiki --verbose
 
-# exportación atómica
 uv run sp_ngrams export --db-path DB --lang es --corpus wiki \
   --dataset-id DATASET_ID --out es.tsv --min-count 5
 
-# borrado transaccional del alias completo
 uv run sp_ngrams db delete --db-path DB --lang es --corpus wiki
 ```
 
-`--export-source raw` no es válido para una generación v2 finalizada porque
-su staging ya fue retirado. `compact` exige una generación completa. Si hay
-varios `dataset_id` bajo el mismo alias, export y búsqueda fallan hasta que se
-seleccione uno explícitamente.
+La exportación usa un archivo parcial, checksum y promoción atómica. Las
+tablas legacy `ngram_counts` y `ngram_totals` siguen disponibles para bases
+migradas y para las operaciones directas de compatibilidad.

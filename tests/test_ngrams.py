@@ -2,6 +2,8 @@ import csv
 from collections import Counter
 from dataclasses import replace
 
+import pytest
+
 from semordnilap.ngrams.cli.extract import build_argparser, command_from_args
 from semordnilap.ngrams.application import (
     ExtractNgramsCommand,
@@ -164,8 +166,19 @@ def test_export_ngrams_writes_expected_tsv(tmp_path):
     repository.close()
 
     with output.open("r", encoding="utf-8", newline="") as f:
-        rows = list(csv.DictReader(f, delimiter="\t"))
+        reader = csv.DictReader(f, delimiter="\t")
+        rows = list(reader)
 
+    assert reader.fieldnames == [
+        "lang",
+        "corpus",
+        "text",
+        "n",
+        "count",
+        "score",
+        "norm_key",
+        "has_punctuation",
+    ]
     assert any(
         row["text"] == "À dor" and row["norm_key"] == "ador" for row in rows
     )
@@ -258,6 +271,20 @@ def test_extract_subcommand_can_keep_punctuation():
     command = command_from_args(args)
 
     assert command.policy.omit_punctuation is False
+
+
+def test_extract_rejects_detected_annotated_input(tmp_path):
+    annotated = tmp_path / "annotated.jsonl"
+    annotated.write_text(
+        '{"schema":"semordnilap.ud-jsonl","schema_version":2}\n',
+        encoding="utf-8",
+    )
+    args = build_argparser().parse_args(
+        ["extract", "--input", str(annotated), "--lang", "gl"]
+    )
+
+    with pytest.raises(ValueError, match="no longer supported"):
+        command_from_args(args)
 
 
 def test_punctuation_metadata_is_persisted_and_exported(tmp_path):
@@ -633,7 +660,8 @@ def test_stats_include_filtered_table_counts(tmp_path):
     )
 
     stats = repository.stats(lang="fr", corpus="test")
-    global_counts = dict(repository.stats()["table_counts"])
+    global_stats = repository.stats()
+    global_counts = dict(global_stats["table_counts"])
     filtered_counts = dict(stats["filtered_table_counts"])
     repository.close()
 
@@ -641,12 +669,11 @@ def test_stats_include_filtered_table_counts(tmp_path):
         "ngram_compactions": 0,
         "ngram_counts": 0,
         "ngram_totals": 0,
-        "ngram_upos_counts": 0,
-        "ngram_upos_totals": 0,
     }
     assert global_counts["ngram_counts"] == 2
     assert global_counts["ngram_totals"] == 1
     assert global_counts["ngram_compactions"] == 1
+    assert global_stats["schema_version"] == 3
 
 
 def test_export_auto_uses_complete_compaction_for_all_n(tmp_path):

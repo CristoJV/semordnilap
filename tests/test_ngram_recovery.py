@@ -1,5 +1,6 @@
 from dataclasses import replace
 
+import duckdb
 import pytest
 
 from semordnilap.ngrams.application import count_corpus, export_tsv
@@ -320,8 +321,6 @@ def test_modern_search_can_select_one_of_multiple_policy_identities(tmp_path):
 def test_legacy_database_requires_explicit_migration_and_stats_open_is_read_only(
     tmp_path,
 ):
-    import duckdb
-
     db_path = tmp_path / "legacy.duckdb"
     connection = duckdb.connect(str(db_path))
     connection.execute(
@@ -331,6 +330,9 @@ def test_legacy_database_requires_explicit_migration_and_stats_open_is_read_only
             norm_key TEXT
         )
         """
+    )
+    connection.execute(
+        "INSERT INTO ngram_counts VALUES ('gl', 'legacy', 'a casa', 2, 7, 'acasa')"
     )
     connection.close()
 
@@ -343,7 +345,156 @@ def test_legacy_database_requires_explicit_migration_and_stats_open_is_read_only
     DuckDbNgramCountRepository.migrate(db_path)
     migrated = DuckDbNgramCountRepository(db_path, read_only=True)
     assert migrated._table_exists("semordnilap_schema") is True
+    assert migrated.schema_version == 3
+    assert migrated._con.execute(
+        "SELECT text, count, has_punctuation FROM ngram_counts"
+    ).fetchall() == [("a casa", 7, False)]
+    assert all(
+        not migrated._table_exists(table)
+        for table in (
+            "ngram_upos_counts",
+            "ngram_upos_totals",
+            "ngram_upos_stage_v2",
+            "ngram_upos_final_v2",
+        )
+    )
     migrated.close()
+
+    DuckDbNgramCountRepository.migrate(db_path)
+    migrated_again = DuckDbNgramCountRepository(db_path, read_only=True)
+    assert migrated_again._con.execute(
+        "SELECT text, count, has_punctuation FROM ngram_counts"
+    ).fetchall() == [("a casa", 7, False)]
+    migrated_again.close()
+
+
+def test_v2_migration_preserves_textual_generations_and_drops_upos(tmp_path):
+    db_path = tmp_path / "v2.duckdb"
+    connection = duckdb.connect(str(db_path))
+    connection.execute(
+        """
+        CREATE TABLE semordnilap_schema (
+            version INTEGER PRIMARY KEY, applied_at TIMESTAMP NOT NULL
+        );
+        INSERT INTO semordnilap_schema VALUES (2, current_timestamp);
+        CREATE TABLE ngram_final_v2 (
+            dataset_id TEXT, generation INTEGER, surface_key TEXT,
+            surface_display TEXT, n INTEGER, count BIGINT, norm_key TEXT,
+            has_punctuation BOOLEAN
+        );
+        INSERT INTO ngram_final_v2 VALUES
+            ('dataset', 1, 'casa, azul', 'casa, azul', 2, 11,
+             'casaazul', true);
+        CREATE TABLE ngram_upos_counts (value INTEGER);
+        CREATE TABLE ngram_upos_totals (value INTEGER);
+        CREATE TABLE ngram_upos_stage_v2 (value INTEGER);
+        CREATE TABLE ngram_upos_final_v2 (value INTEGER);
+        INSERT INTO ngram_upos_counts VALUES (1);
+        """
+    )
+    connection.close()
+
+    with pytest.raises(RuntimeError, match="explicit migration"):
+        DuckDbNgramCountRepository(db_path)
+
+    DuckDbNgramCountRepository.migrate(db_path)
+    migrated = DuckDbNgramCountRepository(db_path, read_only=True)
+
+    assert migrated.schema_version == 3
+    assert migrated._con.execute(
+        """
+        SELECT dataset_id, surface_display, count, has_punctuation
+        FROM ngram_final_v2
+        """
+    ).fetchall() == [("dataset", "casa, azul", 11, True)]
+    assert all(
+        not migrated._table_exists(table)
+        for table in (
+            "ngram_upos_counts",
+            "ngram_upos_totals",
+            "ngram_upos_stage_v2",
+            "ngram_upos_final_v2",
+        )
+    )
+    migrated.close()
+
+
+def test_v2_migration_rolls_back_all_changes_on_failure(tmp_path, monkeypatch):
+    db_path = tmp_path / "v2-failure.duckdb"
+    connection = duckdb.connect(str(db_path))
+    connection.execute(
+        """
+        CREATE TABLE semordnilap_schema (
+            version INTEGER PRIMARY KEY, applied_at TIMESTAMP NOT NULL
+        );
+        INSERT INTO semordnilap_schema VALUES (2, current_timestamp);
+        CREATE TABLE ngram_counts (
+            lang TEXT, corpus TEXT, text TEXT, n INTEGER, count BIGINT,
+            norm_key TEXT
+        );
+        INSERT INTO ngram_counts VALUES
+            ('gl', 'legacy', 'a casa', 2, 5, 'acasa');
+        CREATE TABLE ngram_upos_counts (value INTEGER);
+        INSERT INTO ngram_upos_counts VALUES (1)
+        """
+    )
+    connection.close()
+
+    def fail_version_record(_self, _version):
+        raise RuntimeError("injected migration failure")
+
+    monkeypatch.setattr(
+        DuckDbNgramCountRepository,
+        "_record_schema_version",
+        fail_version_record,
+    )
+    with pytest.raises(RuntimeError, match="injected migration failure"):
+        DuckDbNgramCountRepository.migrate(db_path)
+
+    connection = duckdb.connect(str(db_path), read_only=True)
+    assert (
+        connection.execute(
+            "SELECT MAX(version) FROM semordnilap_schema"
+        ).fetchone()[0]
+        == 2
+    )
+    assert connection.execute(
+        "SELECT text, count FROM ngram_counts"
+    ).fetchall() == [("a casa", 5)]
+    assert (
+        connection.execute(
+            """
+        SELECT COUNT(*) FROM information_schema.tables
+        WHERE table_name = 'ngram_upos_counts'
+        """
+        ).fetchone()[0]
+        == 1
+    )
+    columns = {
+        row[1]
+        for row in connection.execute(
+            "PRAGMA table_info('ngram_counts')"
+        ).fetchall()
+    }
+    assert "has_punctuation" not in columns
+    connection.close()
+
+
+def test_future_database_schema_is_rejected(tmp_path):
+    db_path = tmp_path / "future.duckdb"
+    connection = duckdb.connect(str(db_path))
+    connection.execute(
+        """
+        CREATE TABLE semordnilap_schema (
+            version INTEGER PRIMARY KEY, applied_at TIMESTAMP NOT NULL
+        );
+        INSERT INTO semordnilap_schema VALUES (99, current_timestamp)
+        """
+    )
+    connection.close()
+
+    with pytest.raises(RuntimeError, match="newer than the supported version"):
+        DuckDbNgramCountRepository(db_path, read_only=True)
 
 
 def test_migration_command_is_explicitly_available():

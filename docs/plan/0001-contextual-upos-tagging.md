@@ -5,6 +5,8 @@ Status: complete
 Historical implementation plan. The resulting architecture and its remaining
 risks were audited later in
 [RFC 0001](../rfc/0001-core-pipeline-hardening.md).
+Its UPOS-aware n-gram phases were removed by
+[plan 0004](0004-text-only-ngram-schema-v3.md); standalone tagging remains.
 
 ## Goal
 

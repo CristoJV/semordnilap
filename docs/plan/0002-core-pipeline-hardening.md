@@ -3,6 +3,10 @@
 Status: complete  
 RFC: [0001-core-pipeline-hardening](../rfc/0001-core-pipeline-hardening.md)
 
+Historical scope note: UPOS-aware n-gram input and storage were superseded by
+[plan 0004](0004-text-only-ngram-schema-v3.md) and ADR 0009. Artifact identity,
+transactional generations and the standalone tagging utility remain current.
+
 ## Objective
 
 Turn `corpus -> contextual UPOS tagging -> n-grams` into a reproducible,

@@ -2,6 +2,10 @@
 
 Status: complete
 
+Scope note: the optional tagged-input path described below was removed by
+[plan 0004](0004-text-only-ngram-schema-v3.md) and ADR 0009. This file keeps
+the original implementation record for the direct corpus adapters.
+
 ## Objective
 
 Extract n-grams directly from downloaded Wikisource and CorpusNOS source

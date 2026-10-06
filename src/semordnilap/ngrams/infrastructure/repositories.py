@@ -14,18 +14,21 @@ from semordnilap.ngrams.domain import (
     ExtractedNgram,
     NgramCount,
     NgramKey,
-    TaggedNgramKey,
     build_ngram_count,
 )
 
 logger = logging.getLogger(__name__)
 INSERT_BATCH_SIZE = 50_000
+CURRENT_SCHEMA_VERSION = 3
 RAW_COUNTS_TABLE = "ngram_counts"
 TOTAL_COUNTS_TABLE = "ngram_totals"
-RAW_UPOS_TABLE = "ngram_upos_counts"
-TOTAL_UPOS_TABLE = "ngram_upos_totals"
 V2_FINAL_TABLE = "ngram_final_v2"
-V2_FINAL_UPOS_TABLE = "ngram_upos_final_v2"
+REMOVED_UPOS_TABLES = (
+    "ngram_upos_counts",
+    "ngram_upos_totals",
+    "ngram_upos_stage_v2",
+    "ngram_upos_final_v2",
+)
 
 
 class DuckDbNgramCountRepository:
@@ -54,16 +57,32 @@ class DuckDbNgramCountRepository:
         self._db_path = db_path
         self._fault_injector = None
         self._con = duckdb.connect(str(db_path), read_only=read_only)
-        self._has_v2_schema = self._table_exists("semordnilap_schema")
+        self._schema_version = self._read_schema_version()
+        if self._schema_version > CURRENT_SCHEMA_VERSION:
+            self._con.close()
+            raise RuntimeError(
+                f"DuckDB schema version {self._schema_version} is newer than "
+                f"the supported version {CURRENT_SCHEMA_VERSION}"
+            )
+        self._has_generation_schema = self._table_exists("extraction_datasets")
         if not read_only:
-            if existed and not self._has_v2_schema and not allow_migrate:
+            if (
+                existed
+                and self._schema_version < CURRENT_SCHEMA_VERSION
+                and not allow_migrate
+            ):
                 self._con.close()
                 raise RuntimeError(
-                    "Legacy DuckDB schema requires explicit migration: "
+                    f"DuckDB schema version {self._schema_version} requires "
+                    "explicit migration: "
                     f"sp_ngrams db migrate --db-path {db_path}"
                 )
-            self._ensure_schema()
-            self._has_v2_schema = True
+            if allow_migrate:
+                self._migrate_to_current()
+            else:
+                self._create_schema_v3()
+            self._has_generation_schema = True
+            self._schema_version = CURRENT_SCHEMA_VERSION
 
     def _table_exists(self, table: str) -> bool:
         return bool(
@@ -76,6 +95,18 @@ class DuckDbNgramCountRepository:
             ).fetchone()[0]
         )
 
+    def _read_schema_version(self) -> int:
+        if not self._table_exists("semordnilap_schema"):
+            return 0
+        row = self._con.execute(
+            "SELECT MAX(version) FROM semordnilap_schema"
+        ).fetchone()
+        return int(row[0] or 0)
+
+    @property
+    def schema_version(self) -> int:
+        return self._schema_version
+
     @classmethod
     def migrate(cls, db_path: Path) -> None:
         repository = cls(db_path, allow_migrate=True)
@@ -85,7 +116,53 @@ class DuckDbNgramCountRepository:
         if self._fault_injector is not None:
             self._fault_injector(point)
 
-    def _ensure_schema(self) -> None:
+    def _create_schema_v3(self) -> None:
+        self._con.execute("BEGIN TRANSACTION")
+        try:
+            self._ensure_text_tables()
+            self._ensure_generation_tables()
+            self._record_schema_version(CURRENT_SCHEMA_VERSION)
+            self._con.execute("COMMIT")
+        except Exception:
+            self._con.execute("ROLLBACK")
+            raise
+
+    def _migrate_to_current(self) -> None:
+        if self._schema_version == CURRENT_SCHEMA_VERSION:
+            return
+        self._con.execute("BEGIN TRANSACTION")
+        try:
+            self._ensure_text_tables()
+            self._ensure_generation_tables()
+            for table in REMOVED_UPOS_TABLES:
+                self._con.execute(f"DROP TABLE IF EXISTS {table}")
+            self._record_schema_version(CURRENT_SCHEMA_VERSION)
+            self._con.execute("COMMIT")
+        except Exception:
+            self._con.execute("ROLLBACK")
+            raise
+
+    def _record_schema_version(self, version: int) -> None:
+        self._con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS semordnilap_schema (
+                version INTEGER PRIMARY KEY,
+                applied_at TIMESTAMP NOT NULL
+            )
+            """
+        )
+        self._con.execute(
+            """
+            INSERT INTO semordnilap_schema
+            SELECT ?, current_timestamp
+            WHERE NOT EXISTS (
+                SELECT 1 FROM semordnilap_schema WHERE version = ?
+            )
+            """,
+            [version, version],
+        )
+
+    def _ensure_text_tables(self) -> None:
         self._con.execute(
             """
             CREATE TABLE IF NOT EXISTS ngram_counts (
@@ -96,36 +173,6 @@ class DuckDbNgramCountRepository:
                 count BIGINT NOT NULL,
                 norm_key TEXT NOT NULL,
                 has_punctuation BOOLEAN NOT NULL DEFAULT false
-            )
-            """
-        )
-        self._con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ngram_upos_counts (
-                lang TEXT NOT NULL,
-                corpus TEXT NOT NULL,
-                text TEXT NOT NULL,
-                n INTEGER NOT NULL,
-                norm_key TEXT NOT NULL,
-                has_punctuation BOOLEAN NOT NULL DEFAULT false,
-                upos_pattern TEXT NOT NULL,
-                crosses_sentence BOOLEAN NOT NULL DEFAULT false,
-                count BIGINT NOT NULL
-            )
-            """
-        )
-        self._con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ngram_upos_totals (
-                lang TEXT NOT NULL,
-                corpus TEXT NOT NULL,
-                text TEXT NOT NULL,
-                n INTEGER NOT NULL,
-                norm_key TEXT NOT NULL,
-                has_punctuation BOOLEAN NOT NULL DEFAULT false,
-                upos_pattern TEXT NOT NULL,
-                crosses_sentence BOOLEAN NOT NULL DEFAULT false,
-                count BIGINT NOT NULL
             )
             """
         )
@@ -168,18 +215,6 @@ class DuckDbNgramCountRepository:
                     ADD COLUMN has_punctuation BOOLEAN DEFAULT false
                     """
                 )
-        self._ensure_v2_schema()
-
-    def _ensure_v2_schema(self) -> None:
-        self._con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS semordnilap_schema (
-                version INTEGER PRIMARY KEY,
-                applied_at TIMESTAMP NOT NULL
-            )
-            """
-        )
-        self._create_v2_tables()
 
     def prepare_extraction(
         self,
@@ -262,9 +297,7 @@ class DuckDbNgramCountRepository:
         try:
             for table in (
                 "ngram_stage_v2",
-                "ngram_upos_stage_v2",
                 V2_FINAL_TABLE,
-                V2_FINAL_UPOS_TABLE,
                 "extraction_chunks",
             ):
                 self._con.execute(
@@ -297,11 +330,10 @@ class DuckDbNgramCountRepository:
         document_ordinal: int,
         segment: int,
         final_segment: bool,
-        counts: Counter[NgramKey] | Counter[TaggedNgramKey],
+        counts: Counter[NgramKey],
         lang: str,
         corpus: str,
         fold_nasal_letters: bool,
-        tagged: bool,
     ) -> bool:
         existing = self._con.execute(
             """
@@ -318,35 +350,13 @@ class DuckDbNgramCountRepository:
             return False
 
         base_counts: Counter[ExtractedNgram] = Counter()
-        upos_rows = []
-        if tagged:
-            for key, count in counts.items():
-                if not isinstance(key, TaggedNgramKey):
-                    raise TypeError("Tagged chunk contains an untagged key")
-                base_counts[key.ngram] += count
-                upos_rows.append(
-                    (
-                        dataset_id,
-                        chunk_id,
-                        key.ngram.surface_key,
-                        len(key.ngram.tokens),
-                        key.upos_pattern,
-                        key.crosses_sentence,
-                        count,
-                    )
-                )
-        else:
-            for key, count in counts.items():
-                if isinstance(key, TaggedNgramKey):
-                    raise TypeError("Raw chunk contains a tagged key")
-                if isinstance(key, ExtractedNgram):
-                    base_counts[key] += count
-                else:
-                    base_counts[
-                        ExtractedNgram(
-                            tuple(key), " ".join(key), " ".join(key)
-                        )
-                    ] += count
+        for key, count in counts.items():
+            if isinstance(key, ExtractedNgram):
+                base_counts[key] += count
+            else:
+                base_counts[
+                    ExtractedNgram(tuple(key), " ".join(key), " ".join(key))
+                ] += count
 
         base_rows = []
         for key, count in base_counts.items():
@@ -389,21 +399,6 @@ class DuckDbNgramCountRepository:
                     base_rows,
                 )
             self._fault("commit.after_base_counts")
-            if upos_rows:
-                self._copy_rows(
-                    "ngram_upos_stage_v2",
-                    (
-                        "dataset_id",
-                        "chunk_id",
-                        "surface_key",
-                        "n",
-                        "upos_pattern",
-                        "crosses_sentence",
-                        "count",
-                    ),
-                    upos_rows,
-                )
-            self._fault("commit.after_upos_counts")
             self._con.execute(
                 """
                 INSERT INTO extraction_chunks VALUES (
@@ -464,10 +459,6 @@ class DuckDbNgramCountRepository:
                 [dataset_id],
             )
             self._con.execute(
-                f"DELETE FROM {V2_FINAL_UPOS_TABLE} WHERE dataset_id = ?",
-                [dataset_id],
-            )
-            self._con.execute(
                 f"""
                 INSERT INTO {V2_FINAL_TABLE}
                 SELECT dataset_id, ?, surface_key,
@@ -480,36 +471,6 @@ class DuckDbNgramCountRepository:
                 [generation, dataset_id],
             )
             self._fault("finalize.after_final_counts")
-            self._con.execute(
-                f"""
-                INSERT INTO {V2_FINAL_UPOS_TABLE}
-                SELECT dataset_id, ?, surface_key, n, upos_pattern,
-                       crosses_sentence, SUM(count)
-                FROM ngram_upos_stage_v2
-                WHERE dataset_id = ?
-                GROUP BY dataset_id, surface_key, n, upos_pattern,
-                         crosses_sentence
-                """,
-                [generation, dataset_id],
-            )
-            base_total = self._con.execute(
-                f"""
-                SELECT COALESCE(SUM(count), 0) FROM {V2_FINAL_TABLE}
-                WHERE dataset_id = ? AND generation = ?
-                """,
-                [dataset_id, generation],
-            ).fetchone()[0]
-            upos_total = self._con.execute(
-                f"""
-                SELECT COALESCE(SUM(count), 0) FROM {V2_FINAL_UPOS_TABLE}
-                WHERE dataset_id = ? AND generation = ?
-                """,
-                [dataset_id, generation],
-            ).fetchone()[0]
-            if upos_total and upos_total != base_total:
-                raise ValueError(
-                    "Text and UPOS occurrence totals differ during finalization"
-                )
             self._fault("finalize.after_validation")
             self._con.execute(
                 """
@@ -533,10 +494,6 @@ class DuckDbNgramCountRepository:
                     "DELETE FROM ngram_stage_v2 WHERE dataset_id = ?",
                     [dataset_id],
                 )
-                self._con.execute(
-                    "DELETE FROM ngram_upos_stage_v2 WHERE dataset_id = ?",
-                    [dataset_id],
-                )
             self._fault("finalize.before_transaction_commit")
             self._con.execute("COMMIT")
         except Exception:
@@ -552,7 +509,7 @@ class DuckDbNgramCountRepository:
             ).fetchone()[0]
         )
 
-    def _create_v2_tables(self) -> None:
+    def _ensure_generation_tables(self) -> None:
         self._con.execute(
             """
             CREATE TABLE IF NOT EXISTS extraction_datasets (
@@ -615,19 +572,6 @@ class DuckDbNgramCountRepository:
             """
         )
         self._con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ngram_upos_stage_v2 (
-                dataset_id TEXT NOT NULL,
-                chunk_id TEXT NOT NULL,
-                surface_key TEXT NOT NULL,
-                n INTEGER NOT NULL,
-                upos_pattern TEXT NOT NULL,
-                crosses_sentence BOOLEAN NOT NULL,
-                count BIGINT NOT NULL
-            )
-            """
-        )
-        self._con.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {V2_FINAL_TABLE} (
                 dataset_id TEXT NOT NULL,
@@ -638,28 +582,6 @@ class DuckDbNgramCountRepository:
                 count BIGINT NOT NULL,
                 norm_key TEXT NOT NULL,
                 has_punctuation BOOLEAN NOT NULL
-            )
-            """
-        )
-        self._con.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {V2_FINAL_UPOS_TABLE} (
-                dataset_id TEXT NOT NULL,
-                generation INTEGER NOT NULL,
-                surface_key TEXT NOT NULL,
-                n INTEGER NOT NULL,
-                upos_pattern TEXT NOT NULL,
-                crosses_sentence BOOLEAN NOT NULL,
-                count BIGINT NOT NULL
-            )
-            """
-        )
-        self._con.execute(
-            """
-            INSERT INTO semordnilap_schema
-            SELECT 2, current_timestamp
-            WHERE NOT EXISTS (
-                SELECT 1 FROM semordnilap_schema WHERE version = 2
             )
             """
         )
@@ -732,76 +654,6 @@ class DuckDbNgramCountRepository:
             perf_counter() - started_at,
         )
 
-    def add_tagged_counts(
-        self,
-        counts: Counter[TaggedNgramKey],
-        *,
-        lang: str,
-        corpus: str,
-        fold_nasal_letters: bool,
-    ) -> None:
-        if not counts:
-            return
-
-        base_counts: Counter[ExtractedNgram] = Counter()
-        upos_rows = []
-        for tagged, count in counts.items():
-            base_counts[tagged.ngram] += count
-            row = build_ngram_count(
-                tagged.ngram,
-                count=count,
-                lang=lang,
-                corpus=corpus,
-                fold_nasal_letters=fold_nasal_letters,
-            )
-            upos_rows.append(
-                (
-                    row.lang,
-                    row.corpus,
-                    row.text,
-                    row.n,
-                    row.norm_key,
-                    row.has_punctuation,
-                    tagged.upos_pattern,
-                    tagged.crosses_sentence,
-                    count,
-                )
-            )
-
-        base_rows = []
-        for ngram, count in base_counts.items():
-            row = build_ngram_count(
-                ngram,
-                count=count,
-                lang=lang,
-                corpus=corpus,
-                fold_nasal_letters=fold_nasal_letters,
-            )
-            base_rows.append(
-                (
-                    row.lang,
-                    row.corpus,
-                    row.text,
-                    row.n,
-                    row.count,
-                    row.norm_key,
-                    row.has_punctuation,
-                )
-            )
-
-        n_values = {len(tagged.ngram.tokens) for tagged in counts}
-        self._con.execute("BEGIN TRANSACTION")
-        try:
-            self._insert_batch(base_rows)
-            self._insert_upos_batch(upos_rows)
-            self._invalidate_compactions(
-                lang=lang, corpus=corpus, n_values=n_values
-            )
-            self._con.execute("COMMIT")
-        except Exception:
-            self._con.execute("ROLLBACK")
-            raise
-
     def _insert_batch(self, rows: list[tuple]) -> None:
         self._copy_rows(
             "ngram_counts",
@@ -851,23 +703,6 @@ class DuckDbNgramCountRepository:
         finally:
             tmp_path.unlink(missing_ok=True)
 
-    def _insert_upos_batch(self, rows: list[tuple]) -> None:
-        self._copy_rows(
-            RAW_UPOS_TABLE,
-            (
-                "lang",
-                "corpus",
-                "text",
-                "n",
-                "norm_key",
-                "has_punctuation",
-                "upos_pattern",
-                "crosses_sentence",
-                "count",
-            ),
-            rows,
-        )
-
     def _invalidate_compactions(
         self, *, lang: str, corpus: str, n_values: set[int]
     ) -> None:
@@ -878,13 +713,6 @@ class DuckDbNgramCountRepository:
         self._con.execute(
             f"""
             DELETE FROM ngram_totals
-            WHERE lang = ? AND corpus = ? AND n IN ({placeholders})
-            """,
-            params,
-        )
-        self._con.execute(
-            f"""
-            DELETE FROM {TOTAL_UPOS_TABLE}
             WHERE lang = ? AND corpus = ? AND n IN ({placeholders})
             """,
             params,
@@ -906,6 +734,12 @@ class DuckDbNgramCountRepository:
     def _resolve_v2_dataset(
         self, *, lang: str, corpus: str, dataset_id: str | None = None
     ):
+        if not self._has_generation_schema:
+            if dataset_id:
+                raise ValueError(
+                    "dataset_id requires a generation-based database schema"
+                )
+            return None
         if dataset_id:
             row = self._con.execute(
                 """
@@ -949,47 +783,27 @@ class DuckDbNgramCountRepository:
         min_norm_len: int,
         max_norm_len: int,
     ):
-        where = ["b.dataset_id = ?", "b.generation = ?", "b.count >= ?"]
+        where = ["dataset_id = ?", "generation = ?", "count >= ?"]
         params: list = [dataset_id, generation, min_count]
         if export_n:
-            where.append("b.n = ?")
+            where.append("n = ?")
             params.append(export_n)
         if min_norm_len:
-            where.append("length(b.norm_key) >= ?")
+            where.append("length(norm_key) >= ?")
             params.append(min_norm_len)
         if max_norm_len:
-            where.append("length(b.norm_key) <= ?")
+            where.append("length(norm_key) <= ?")
             params.append(max_norm_len)
         limit = f"LIMIT {max_results}" if max_results else ""
         result = self._con.execute(
             f"""
-            WITH patterns AS (
-                SELECT surface_key, n,
-                       list(
-                           struct_pack(pattern := upos_pattern, count := count)
-                           ORDER BY count DESC, upos_pattern
-                       ) AS upos_counts
-                FROM {V2_FINAL_UPOS_TABLE}
-                WHERE dataset_id = ? AND generation = ?
-                GROUP BY surface_key, n
-            ), crossing AS (
-                SELECT surface_key, n, SUM(count) AS crossing_count
-                FROM {V2_FINAL_UPOS_TABLE}
-                WHERE dataset_id = ? AND generation = ?
-                  AND crosses_sentence
-                GROUP BY surface_key, n
-            )
-            SELECT b.surface_display, b.n, b.count, b.norm_key,
-                   b.has_punctuation, patterns.upos_counts,
-                   COALESCE(crossing.crossing_count, 0)
-            FROM {V2_FINAL_TABLE} b
-            LEFT JOIN patterns USING (surface_key, n)
-            LEFT JOIN crossing USING (surface_key, n)
+            SELECT surface_display, n, count, norm_key, has_punctuation
+            FROM {V2_FINAL_TABLE}
             WHERE {" AND ".join(where)}
-            ORDER BY b.count DESC, b.surface_key ASC
+            ORDER BY count DESC, surface_key ASC
             {limit}
             """,
-            [dataset_id, generation, dataset_id, generation, *params],
+            params,
         )
         while row := result.fetchone():
             yield NgramCount(
@@ -1000,11 +814,6 @@ class DuckDbNgramCountRepository:
                 count=row[2],
                 norm_key=row[3],
                 has_punctuation=row[4],
-                upos_counts=tuple(
-                    (value["pattern"], value["count"])
-                    for value in (row[5] or [])
-                ),
-                cross_sentence_count=row[6],
             )
 
     def iter_counts(
@@ -1031,7 +840,7 @@ class DuckDbNgramCountRepository:
                 )
             if source == "raw":
                 raise RuntimeError(
-                    "Raw staging was retired after v2 finalization"
+                    "Raw staging was retired after generation finalization"
                 )
             yield from self._iter_v2_counts(
                 dataset_id=dataset_id,
@@ -1084,7 +893,6 @@ class DuckDbNgramCountRepository:
                 ORDER BY total_count DESC, text ASC
                 {limit_clause}
             """
-            upos_table = TOTAL_UPOS_TABLE
         else:
             base_sql = f"""
                 SELECT lang, corpus, text, n, SUM(count) AS total_count,
@@ -1096,58 +904,7 @@ class DuckDbNgramCountRepository:
                 ORDER BY total_count DESC, text ASC
                 {limit_clause}
             """
-            upos_table = RAW_UPOS_TABLE
-
-        sql = f"""
-        WITH base AS ({base_sql}),
-        pattern_totals AS (
-            SELECT p.lang, p.corpus, p.text, p.n, p.norm_key,
-                   p.has_punctuation, p.upos_pattern,
-                   SUM(p.count) AS pattern_count
-            FROM {upos_table} p
-            JOIN base b USING (
-                lang, corpus, text, n, norm_key, has_punctuation
-            )
-            GROUP BY p.lang, p.corpus, p.text, p.n, p.norm_key,
-                     p.has_punctuation, p.upos_pattern
-        ),
-        patterns AS (
-            SELECT lang, corpus, text, n, norm_key, has_punctuation,
-                   list(
-                       struct_pack(
-                           pattern := upos_pattern,
-                           count := pattern_count
-                       )
-                       ORDER BY pattern_count DESC, upos_pattern
-                   ) AS upos_counts
-            FROM pattern_totals
-            GROUP BY lang, corpus, text, n, norm_key, has_punctuation
-        ),
-        crossing AS (
-            SELECT p.lang, p.corpus, p.text, p.n, p.norm_key,
-                   p.has_punctuation, SUM(p.count) AS cross_sentence_count
-            FROM {upos_table} p
-            JOIN base b USING (
-                lang, corpus, text, n, norm_key, has_punctuation
-            )
-            WHERE p.crosses_sentence
-            GROUP BY p.lang, p.corpus, p.text, p.n, p.norm_key,
-                     p.has_punctuation
-        )
-        SELECT b.lang, b.corpus, b.text, b.n, b.total_count, b.norm_key,
-               b.has_punctuation, patterns.upos_counts,
-               COALESCE(crossing.cross_sentence_count, 0)
-        FROM base b
-        LEFT JOIN patterns USING (
-            lang, corpus, text, n, norm_key, has_punctuation
-        )
-        LEFT JOIN crossing USING (
-            lang, corpus, text, n, norm_key, has_punctuation
-        )
-        ORDER BY b.total_count DESC, b.text ASC
-        """
-
-        result = self._con.execute(sql, [*params, min_count])
+        result = self._con.execute(base_sql, [*params, min_count])
         while row := result.fetchone():
             yield self._row_to_count(row)
 
@@ -1174,9 +931,6 @@ class DuckDbNgramCountRepository:
         return " AND ".join(where), params
 
     def _row_to_count(self, row) -> NgramCount:
-        upos_counts = tuple(
-            (value["pattern"], value["count"]) for value in (row[7] or [])
-        )
         return NgramCount(
             lang=row[0],
             corpus=row[1],
@@ -1185,8 +939,6 @@ class DuckDbNgramCountRepository:
             count=row[4],
             norm_key=row[5],
             has_punctuation=row[6],
-            upos_counts=upos_counts,
-            cross_sentence_count=row[8],
         )
 
     def _select_counts_table(
@@ -1292,28 +1044,6 @@ class DuckDbNgramCountRepository:
                 [lang, corpus, n],
             )
             self._con.execute(
-                f"""
-                DELETE FROM {TOTAL_UPOS_TABLE}
-                WHERE lang = ? AND corpus = ? AND n = ?
-                """,
-                [lang, corpus, n],
-            )
-            self._con.execute(
-                f"""
-                INSERT INTO {TOTAL_UPOS_TABLE}(
-                    lang, corpus, text, n, norm_key, has_punctuation,
-                    upos_pattern, crosses_sentence, count
-                )
-                SELECT lang, corpus, text, n, norm_key, has_punctuation,
-                       upos_pattern, crosses_sentence, SUM(count)
-                FROM {RAW_UPOS_TABLE}
-                WHERE lang = ? AND corpus = ? AND n = ?
-                GROUP BY lang, corpus, text, n, norm_key, has_punctuation,
-                         upos_pattern, crosses_sentence
-                """,
-                [lang, corpus, n],
-            )
-            self._con.execute(
                 """
                 DELETE FROM ngram_compactions
                 WHERE lang = ? AND corpus = ? AND n = ?
@@ -1394,7 +1124,7 @@ class DuckDbNgramCountRepository:
 
         v2_datasets = []
         v2_table_counts = []
-        if self._has_v2_schema:
+        if self._has_generation_schema:
             v2_datasets = self._con.execute(
                 """
                 SELECT dataset_id, artifact_id, policy_hash, lang, corpus,
@@ -1409,13 +1139,7 @@ class DuckDbNgramCountRepository:
                 """
                 SELECT 'ngram_stage_v2', COUNT(*) FROM ngram_stage_v2
                 UNION ALL
-                SELECT 'ngram_upos_stage_v2', COUNT(*)
-                FROM ngram_upos_stage_v2
-                UNION ALL
                 SELECT 'ngram_final_v2', COUNT(*) FROM ngram_final_v2
-                UNION ALL
-                SELECT 'ngram_upos_final_v2', COUNT(*)
-                FROM ngram_upos_final_v2
                 UNION ALL
                 SELECT 'extraction_chunks', COUNT(*) FROM extraction_chunks
                 """
@@ -1475,12 +1199,6 @@ class DuckDbNgramCountRepository:
             SELECT 'ngram_totals' AS table_name, COUNT(*) AS rows
             FROM ngram_totals
             UNION ALL
-            SELECT 'ngram_upos_counts' AS table_name, COUNT(*) AS rows
-            FROM ngram_upos_counts
-            UNION ALL
-            SELECT 'ngram_upos_totals' AS table_name, COUNT(*) AS rows
-            FROM ngram_upos_totals
-            UNION ALL
             SELECT 'ngram_compactions' AS table_name, COUNT(*) AS rows
             FROM ngram_compactions
             ORDER BY table_name
@@ -1497,20 +1215,12 @@ class DuckDbNgramCountRepository:
             FROM ngram_totals
             {where_clause}
             UNION ALL
-            SELECT 'ngram_upos_counts' AS table_name, COUNT(*) AS rows
-            FROM ngram_upos_counts
-            {where_clause}
-            UNION ALL
-            SELECT 'ngram_upos_totals' AS table_name, COUNT(*) AS rows
-            FROM ngram_upos_totals
-            {where_clause}
-            UNION ALL
             SELECT 'ngram_compactions' AS table_name, COUNT(*) AS rows
             FROM ngram_compactions
             {where_clause}
             ORDER BY table_name
             """,
-            [*params, *params, *params, *params, *params],
+            [*params, *params, *params],
         ).fetchall()
 
         compacted = self._con.execute(
@@ -1524,6 +1234,7 @@ class DuckDbNgramCountRepository:
         ).fetchall()
 
         return {
+            "schema_version": self._schema_version,
             "by_lang_corpus": by_lang_corpus,
             "by_n": by_n,
             "totals_by_n": totals_by_n,
@@ -1553,12 +1264,6 @@ class DuckDbNgramCountRepository:
             TOTAL_COUNTS_TABLE: self._count_table_rows(
                 TOTAL_COUNTS_TABLE, lang=lang, corpus=corpus
             ),
-            RAW_UPOS_TABLE: self._count_table_rows(
-                RAW_UPOS_TABLE, lang=lang, corpus=corpus
-            ),
-            TOTAL_UPOS_TABLE: self._count_table_rows(
-                TOTAL_UPOS_TABLE, lang=lang, corpus=corpus
-            ),
             "ngram_compactions": self._count_table_rows(
                 "ngram_compactions", lang=lang, corpus=corpus
             ),
@@ -1576,13 +1281,11 @@ class DuckDbNgramCountRepository:
         deleted["v2_datasets"] = len(dataset_ids)
         logger.info(
             "Deleting n-gram rows for lang=%s corpus=%s: raw=%d totals=%d "
-            "upos_raw=%d upos_totals=%d compactions=%d",
+            "compactions=%d",
             lang,
             corpus,
             deleted[RAW_COUNTS_TABLE],
             deleted[TOTAL_COUNTS_TABLE],
-            deleted[RAW_UPOS_TABLE],
-            deleted[TOTAL_UPOS_TABLE],
             deleted["ngram_compactions"],
         )
         self._con.execute("BEGIN TRANSACTION")
@@ -1590,8 +1293,6 @@ class DuckDbNgramCountRepository:
             for table in (
                 RAW_COUNTS_TABLE,
                 TOTAL_COUNTS_TABLE,
-                RAW_UPOS_TABLE,
-                TOTAL_UPOS_TABLE,
                 "ngram_compactions",
             ):
                 self._con.execute(
@@ -1601,9 +1302,7 @@ class DuckDbNgramCountRepository:
             for dataset_id in dataset_ids:
                 for table in (
                     "ngram_stage_v2",
-                    "ngram_upos_stage_v2",
                     V2_FINAL_TABLE,
-                    V2_FINAL_UPOS_TABLE,
                     "extraction_chunks",
                 ):
                     self._con.execute(

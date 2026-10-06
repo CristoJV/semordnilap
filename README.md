@@ -1,16 +1,13 @@
 # Semordnilap
 
-Pipeline reproducible para construir n-gramas en español y gallego,
-directamente desde corpus fuente o con información contextual UPOS opcional.
+Pipeline reproducible para construir n-gramas textuales en español y gallego
+directamente desde corpus fuente.
 
 ```mermaid
 flowchart LR
     H[HF corpus revision] --> C[Corpus shards]
-    C --> R[Raw adapter]
-    C -. optional .-> T[Stanza ES/GL]
-    T --> U[UD v2 gzip shards]
+    C --> R[Corpus adapter]
     R --> N[Streaming n-grams]
-    U --> N
     N --> D[(DuckDB generations)]
     D --> S[Optional search]
 ```
@@ -19,7 +16,7 @@ flowchart LR
 
 ```text
 sp_corpus              descarga corpus versionados por subcomando
-sp_tag                 descarga modelos, smoke tests y tagging contextual
+sp_tag                 utilidad independiente de tagging contextual
 sp_ngrams              extracción, migración, inspección y exportación
 sp_search_ngrams       consumidor opcional de semordnilaps
 ```
@@ -43,10 +40,10 @@ Las decisiones principales son:
   etiquetado intermedio;
 - la puntuación se conserva por defecto y las ventanas pueden cruzar frases,
   pero nunca documentos;
-- el tagging se realiza sobre el contexto completo o sobre fragmentos largos
-  con límites explícitos y offsets globales;
-- el formato actual es UD JSONL v2 comprimido y dividido en shards; el lector
-  mantiene compatibilidad con v1;
+- el almacenamiento de n-gramas es exclusivamente textual y conserva
+  `has_punctuation`; no persiste UPOS ni estado de cruce de frase;
+- `sp_tag` conserva su propio formato UD JSONL, pero su salida no es una
+  entrada de `sp_ngrams`;
 - cada artefacto final tiene manifiesto, checksums e identidad inmutable;
 - reintentar extracción no duplica recuentos y cambiar una política crea otra
   identidad;
@@ -54,4 +51,4 @@ Las decisiones principales son:
 
 Documentación: [mapa](docs/README.md), [ADRs](docs/adr/README.md),
 [RFC implementado](docs/rfc/0001-core-pipeline-hardening.md) y
-[plan actual](docs/plan/0003-direct-corpus-ngram-adapters.md).
+[plan actual](docs/plan/0004-text-only-ngram-schema-v3.md).

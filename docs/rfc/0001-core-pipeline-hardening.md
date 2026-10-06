@@ -5,6 +5,10 @@ Date: 2026-10-04
 Scope: corpus download, contextual tagging, n-gram extraction and repository
 cleanup
 
+Historical scope note: the RFC's UPOS-aware n-gram path was later superseded
+by [ADR 0009](../adr/0009-text-only-ngram-schema-v3.md). Tagging remains an
+independent utility; current n-gram extraction is text-only.
+
 ## Summary
 
 Make `corpus -> tagging -> n-grams` the supported product boundary. Before

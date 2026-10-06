@@ -4,9 +4,10 @@ Status: accepted
 
 ## Decision
 
-Tagging is an optional enrichment stage for consumers that need contextual
-UPOS/FEATS. It is not a prerequisite for lexical n-gram extraction; source
-adapters can stream downloaded corpus shards directly into the n-gram engine.
+Tagging is an independent utility for consumers that need contextual
+UPOS/FEATS. It is not a stage or accepted input of lexical n-gram extraction;
+source adapters stream downloaded corpus shards directly into the n-gram
+engine.
 
 Legacy v1 writes one annotated document per JSONL line to a persistent `.part` file. Flush
 and `fsync` it every configurable number of completed documents (10 by

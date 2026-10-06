@@ -1,138 +1,114 @@
 # Arquitectura técnica
 
-Estado implementado a 2026-10-05.
+Estado implementado a 2026-10-06.
 
-## Componentes
+## Flujo de n-gramas
 
 ```mermaid
 flowchart LR
-    HF[HF revision] --> CA[corpus adapter]
+    HF[HF revision] --> CA[corpus acquisition]
     CA --> CS[(source gzip shards)]
-    CS --> RA[raw source adapter]
-    CS -. optional .-> ST[Stanza adapter]
-    ST --> UD[provider-neutral UD domain]
-    UD --> TS[(tagged v2 shards)]
-    RA --> EX[streaming windows]
-    TS --> EX[streaming windows]
+    CS --> RA[manifest-aware adapter]
+    RA --> EX[raw Unicode windows]
     EX --> TX[transactional chunks]
-    TX --> FG[(active DuckDB generation)]
+    TX --> FG[(active DuckDB generation v3)]
     FG --> SE[optional read-only search]
+
+    CS -. independent utility .-> ST[sp_tag / Stanza]
+    ST --> UD[(UD JSONL artifacts)]
 ```
+
+La rama de tagging es independiente. `sp_ngrams` no importa su modelo de
+dominio, no lee `ud-jsonl` y no persiste UPOS.
 
 | Capa | Módulos | Responsabilidad |
 |---|---|---|
-| Corpus | `corpus/{cli,wikisource,corpusnos}.py` | selección de fuente/subconjuntos, export streaming, shards, revisión y resume |
-| Tagging domain | `tagging/domain.py` | contrato neutral, UPOS, spans, v1/v2 |
-| Tagging adapters | `tagging/stanza.py`, `tagging/io.py` | Stanza y lectura streaming |
-| Tagging application | `tagging/application.py`, `tagging/sharded.py` | checkpoints v1, shards v2, splitting y cuarentena |
-| N-gram domain | `ngrams/domain/*` | tokenización Unicode, ventanas y normalización |
-| N-gram application | `ngrams/application/*` | identidad, chunks, resume y export |
-| N-gram source adapters | `ngrams/infrastructure/corpus_adapters.py` | resolución segura de colecciones Wikisource/CorpusNÓS, idioma y shards |
-| Storage | `ngrams/infrastructure/repositories.py` | migraciones y generaciones DuckDB |
+| Corpus | `corpus/{cli,wikisource,corpusnos}.py` | selección, export streaming, shards, revisión y resume |
+| N-gram domain | `ngrams/domain/*` | tokenización Unicode, ventanas, filtros y normalización |
+| N-gram application | `ngrams/application/*` | identidad, chunks, resume y exportación |
+| Source adapters | `ngrams/infrastructure/corpus_adapters.py` | resolución segura de colecciones, idioma y shards |
+| Storage | `ngrams/infrastructure/repositories.py` | esquema v3, migraciones y generaciones DuckDB |
 | Search | `search/*` | consumidor opcional sólo lectura |
+| Tagging | `tagging/*` | utilidad UD independiente, sin integración con n-gramas |
 | Shared | `utils/artifacts.py`, `utils/io.py`, `utils/text.py` | checksums, locks, manifests e I/O |
 
-Las dependencias runtime directas son `datasets`, `duckdb`, `stanza` y `tqdm`.
+## Artefactos e identidad
 
-## Ciclo de vida de artefactos
+Los corpus gestionados tienen manifiesto versionado, estado, configuración,
+checksums, procedencia y `artifact_id`. Un manifiesto de colección enumera de
+forma autoritativa sus hijos; los adaptadores no consumen directorios `.part`,
+artefactos incompletos ni hijos no declarados.
 
-```mermaid
-stateDiagram-v2
-    [*] --> writing
-    writing --> writing: checkpoint/shard
-    writing --> complete: validate + atomic promote
-    writing --> writing: resume
-    complete --> [*]
-```
+`dataset_id` deriva del artefacto fuente, el hash de política, idioma y alias
+de corpus. `chunk_id` identifica un segmento determinista. Cambiar una opción
+semántica crea otra identidad y repetir un chunk ya confirmado es un no-op.
 
-Todo artefacto nuevo contiene schema/version, estado, configuración semántica,
-provenance, checksums y `artifact_id`. Los writers mantienen un lock POSIX no
-bloqueante con PID/host. Un consumidor rechaza tagged data incompleto salvo
-`--allow-incomplete-input` explícito. Los adaptadores raw sólo seleccionan
-hijos completos enumerados por el manifest de colección y no recorren
-directorios `.part` o artefactos no declarados.
+## Ventanas y superficie
 
-Los corpus y tagged v2 son directorios de shards gzip confirmados
-independientemente. Un fallo sólo invalida el shard temporal. La promoción del
-directorio completo ocurre después de escribir el manifiesto final.
+El extractor recorre spans lexicales Unicode sobre cada documento fuente. Una
+deque de tamaño `max_n` permite ventanas que atraviesen puntuación y límites
+de frase, pero se vacía al terminar cada documento. La superficie comprende
+desde el primer token léxico hasta el final del último y conserva la puntuación
+intermedia.
 
-## Contrato UD
+- `surface_key`: NFC, case-folding Unicode y espacios colapsados;
+- `surface_display`: grafía de origen con espacios normalizados;
+- `norm_key`: clave compacta sin puntuación ni acentos para invertir;
+- `has_punctuation`: presencia de puntuación en la superficie.
 
-El modelo lógico contiene documento, texto original, frases ordenadas, offsets
-Python absolutos, tokens de superficie, palabras UD, UPOS y FEATS. Se validan
-IDs, orden, no solapamiento y `text[start:end] == token.text`.
+No existe una propiedad `crosses_sentence`: sin tagging no hay un límite de
+frase anotado fiable, y la superficie ya permite observar la puntuación.
 
-- v1: una línea/documento, campos verbosos con lemma/XPOS; continúa legible y
-  su protocolo de checkpoint por bytes sigue disponible.
-- v2 compact: JSONL gzip sharded; token text se reconstruye del span, mantiene
-  word text, UPOS y FEATS.
-- v2 full: añade lemma y XPOS.
-
-Documentos largos se dividen antes de Stanza en límites seguros. Cada
-fragmento se etiqueta con contexto local, después se desplazan offsets y
-índices a coordenadas globales. El manifiesto/document metadata registra los
-límites; tramos indivisibles o errores pueden cuarentenarse.
-
-## Semántica de ventanas
-
-El extractor raw recorre spans lexicales Unicode directamente sobre cada
-documento. La rama etiquetada recorre los tokens UD y conserva su UPOS
-contextual. Ambas usan una deque de tamaño `max_n`, preservan la puntuación
-intermedia entre el primer y último token y vacían siempre la ventana en cada
-límite de documento.
-
-Raw y tagged comparten la misma superficie canónica. La identidad textual y
-la evidencia gramatical están separadas: una fila textual agregada se relaciona
-con varios patrones UPOS y sus frecuencias sólo cuando la entrada era tagged.
-La ruta raw no fabrica evidencia gramatical.
-
-## DuckDB v2
+## DuckDB schema v3
 
 ```mermaid
 erDiagram
     extraction_datasets ||--o{ extraction_runs : owns
     extraction_datasets ||--o{ extraction_chunks : commits
     extraction_chunks ||--o{ ngram_stage_v2 : stages
-    extraction_chunks ||--o{ ngram_upos_stage_v2 : stages
     extraction_datasets ||--o{ ngram_final_v2 : activates
-    extraction_datasets ||--o{ ngram_upos_final_v2 : activates
 ```
 
-`dataset_id` deriva del artefacto fuente y `policy_hash`; `chunk_id` identifica
-un segmento determinista. COPY masivo, staging, ledger y cursor se confirman en
-una transacción. La finalización agrega una nueva generación, valida totales,
-activa y elimina staging en otra transacción. El replay de un chunk es no-op.
+Los sufijos `_v2` de las tablas de generación se mantienen para preservar los
+datos existentes; la versión del esquema global es 3. Cada chunk confirma en
+una transacción sus recuentos textuales, ledger y cursor. La finalización agrega
+una generación, la activa y retira staging en otra transacción.
 
-Las migraciones son explícitas. Inspección, export y búsqueda abren read-only.
-Alias ambiguos requieren el `dataset_id`; nunca se mezclan políticas.
+Las tablas legacy `ngram_counts`, `ngram_totals` y `ngram_compactions` siguen
+disponibles. Tanto ellas como las tablas de generación almacenan
+`has_punctuation` en las filas textuales.
 
-## Límites de memoria y recuperación
+## Migración
+
+Una apertura de escritura exige esquema actual. La única actualización
+permitida es explícita:
+
+```bash
+uv run sp_ngrams db migrate --db-path DB
+```
+
+La migración se ejecuta en una transacción. Para v0/v1 crea las estructuras
+que falten y añade `has_punctuation=false`. Para v2 preserva tablas y filas
+textuales y elimina las cuatro relaciones UPOS legacy/staging/final. Registrar
+v3 por segunda vez no duplica ni altera datos. Una versión superior a 3 se
+rechaza incluso en modo de lectura para evitar interpretaciones incompatibles.
+
+## Límites y recuperación
 
 | Etapa | Límite principal | Recuperación |
 |---|---|---|
 | Corpus | fila + shard actual | último shard confirmado |
-| Tagging v2 | modelo + fragmento <= límite + shard | cursor del último shard |
-| Tagging v1 | modelo + documento | offsets fuente/salida; indexación legacy una vez |
 | Extracción | deque `max_n` + contador configurado | último documento/segmento transaccional |
-| Finalización | memoria/temporales administrados por DuckDB | rollback de generación |
-| Export | una fila + buffer de archivo | final anterior intacto |
+| Finalización | temporales administrados por DuckDB | rollback de generación |
+| Exportación | una fila + buffer de archivo | final anterior intacto |
 
-Stanza mantiene un pipeline por proceso. No se multiplican modelos por defecto:
-el RFC condicionó workers/batching a mediciones, y el diseño actual prioriza un
-pico de memoria predecible. El heartbeat distingue un documento lento de un
-bloqueo.
-
-## Calidad y medición
+## Verificación
 
 ```bash
 uv run pytest -q
 uv run ruff check .
-uv run sp_tag smoke --langs es gl --model-dir data/models/stanza
-uv run python scripts/benchmark_core.py --windows 10000 1000000 \
-  --oversized-document
 ```
 
-Los tests incluyen fallos inyectados antes de commits, replay, resume,
-identidades múltiples, locks, manifests, compatibilidad v1/v2, splitting y
-cuarentena. Los benchmarks informan resultados, no fijan presupuestos ligados
-a una máquina concreta.
+Las pruebas cubren fallos inyectados, replay, identidades múltiples,
+adaptadores de corpus, migración v0/v1 y v2, idempotencia, rechazo de esquemas
+futuros y ausencia de tablas UPOS tras migrar.

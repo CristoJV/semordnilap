@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-import json
 import logging
 from dataclasses import asdict
 from collections import Counter
@@ -15,11 +14,8 @@ from semordnilap.ngrams.application.commands import ExtractNgramsCommand
 from semordnilap.ngrams.domain import (
     NgramKey,
     NgramCountRepository,
-    TaggedNgramKey,
-    iter_ngrams_from_annotated_document,
     iter_ngrams_from_text,
 )
-from semordnilap.tagging.io import iter_annotated_documents
 from semordnilap.utils.io import iter_texts
 from semordnilap.ngrams.domain.normalize import NORMALIZATION_VERSION
 from semordnilap.utils.artifacts import (
@@ -58,27 +54,6 @@ def flush_counts(
     counts.clear()
 
 
-def flush_tagged_counts(
-    repository: NgramCountRepository,
-    counts: Counter[TaggedNgramKey],
-    command: ExtractNgramsCommand,
-) -> None:
-    if not counts:
-        return
-    logger.info(
-        "Flushing %d unique tagged n-grams after %d pending occurrences",
-        len(counts),
-        counts.total(),
-    )
-    repository.add_tagged_counts(
-        counts,
-        lang=command.policy.lang,
-        corpus=command.corpus,
-        fold_nasal_letters=command.policy.fold_nasal_letters,
-    )
-    counts.clear()
-
-
 def count_corpus(
     command: ExtractNgramsCommand, repository: NgramCountRepository
 ) -> int:
@@ -90,11 +65,6 @@ def count_corpus(
     input_manifest = None
     if manifest_path(command.input_path).exists():
         input_manifest = read_complete_manifest(command.input_path)
-    elif (
-        command.input_format == "ud-jsonl"
-        and not command.allow_incomplete_input
-    ):
-        read_complete_manifest(command.input_path)
     artifact_id = (
         input_manifest["artifact_id"]
         if input_manifest
@@ -140,44 +110,31 @@ def count_corpus(
         )
 
     completed_documents = int(state["completed_documents"])
-    tagged = command.input_format == "ud-jsonl"
-    if tagged:
-        documents = (
-            (document.doc_id, document.text, document)
-            for document in iter_annotated_documents(command.input_path)
+    source_paths = command.input_files or (command.input_path,)
+    documents = (
+        (str(index), text)
+        for index, text in enumerate(
+            (
+                text
+                for source_path in source_paths
+                for text in iter_texts(
+                    source_path,
+                    command.input_format,
+                    command.text_field,
+                )
+            ),
+            1,
         )
-        description = "Extracting annotated corpus"
-    else:
-        source_paths = command.input_files or (command.input_path,)
-        documents = (
-            (str(index), text, text)
-            for index, text in enumerate(
-                (
-                    text
-                    for source_path in source_paths
-                    for text in iter_texts(
-                        source_path,
-                        command.input_format,
-                        command.text_field,
-                    )
-                ),
-                1,
-            )
-        )
-        description = "Extracting corpus"
+    )
 
     committed_chunks = generated = 0
-    progress = tqdm(documents, desc=description, unit="doc")
-    for doc_index, (doc_id, text, document) in enumerate(progress, 1):
+    progress = tqdm(documents, desc="Extracting corpus", unit="doc")
+    for doc_index, (doc_id, text) in enumerate(progress, 1):
         if command.limit_docs and doc_index > command.limit_docs:
             break
         if doc_index <= completed_documents:
             continue
-        iterator = (
-            iter_ngrams_from_annotated_document(document, command.policy)
-            if tagged
-            else iter_ngrams_from_text(text, command.policy)
-        )
+        iterator = iter_ngrams_from_text(text, command.policy)
         pending = Counter()
         segment = 0
 
@@ -208,7 +165,6 @@ def count_corpus(
                 lang=command.policy.lang,
                 corpus=command.corpus,
                 fold_nasal_letters=command.policy.fold_nasal_letters,
-                tagged=tagged,
             )
             if inserted:
                 committed_chunks += 1
@@ -265,8 +221,6 @@ def export_tsv(
                     "score",
                     "norm_key",
                     "has_punctuation",
-                    "upos_counts",
-                    "cross_sentence_count",
                 ],
                 delimiter="\t",
             )
@@ -283,12 +237,6 @@ def export_tsv(
                         "score": row.score(command.policy),
                         "norm_key": row.norm_key,
                         "has_punctuation": row.has_punctuation,
-                        "upos_counts": json.dumps(
-                            dict(row.upos_counts),
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        ),
-                        "cross_sentence_count": row.cross_sentence_count,
                     }
                 )
                 exported += 1
@@ -305,7 +253,7 @@ def export_tsv(
         digest = sha256_file(command.output_path)
         manifest = {
             "schema": "semordnilap.ngram-tsv",
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "complete",
             "created_at": utc_now(),
             "sha256": digest,

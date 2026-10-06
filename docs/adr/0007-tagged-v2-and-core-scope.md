@@ -1,6 +1,7 @@
 # ADR 0007: Tagged v2 and reduced core scope
 
-Status: accepted
+Status: accepted; n-gram integration superseded by
+[ADR 0009](0009-text-only-ngram-schema-v3.md)
 
 ## Decision
 
@@ -20,10 +21,9 @@ utilities and optional modern DuckDB search/scoring. Desktop UI, review,
 phrases, FreeLing, embeddings, candidate/dictionary extraction and legacy
 search were removed with their commands, tests and dependencies.
 
-The supported pipeline now branches after corpus acquisition: direct raw
-n-gram extraction is the low-storage default when lexical counts suffice;
-tagged v2 is the optional enrichment branch for contextual UPOS evidence.
-Both branches converge on the same idempotent DuckDB generation storage.
+N-gram extraction follows only the direct source-corpus path. Tagged v2 is an
+independent artifact for non-ngram consumers and never converges on DuckDB
+n-gram storage.
 
 ## Consequences
 

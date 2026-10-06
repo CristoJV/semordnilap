@@ -138,7 +138,7 @@ def iter_texts(
             yield from iter_texts_from_jsonl(corpus_file, text_field)
         elif input_format == "ud-jsonl":
             raise ValueError(
-                "Annotated UPOS input must use the annotated-document adapter"
+                "Annotated ud-jsonl is not a raw-text corpus format"
             )
         else:
             raise ValueError(f"Unsupported input format: {input_format}")

@@ -27,15 +27,6 @@ NgramKey = tuple[str, ...] | ExtractedNgram
 
 
 @dataclass(frozen=True)
-class TaggedNgramKey:
-    """One contextual UPOS interpretation of a textual n-gram."""
-
-    ngram: ExtractedNgram
-    upos_pattern: str
-    crosses_sentence: bool = False
-
-
-@dataclass(frozen=True)
 class NgramExtractionPolicy:
     lang: str
     max_n: int = 3
@@ -68,8 +59,6 @@ class NgramCount:
     count: int
     norm_key: str
     has_punctuation: bool = False
-    upos_counts: tuple[tuple[str, int], ...] = ()
-    cross_sentence_count: int = 0
 
     @property
     def tokens(self) -> tuple[str, ...]:
@@ -91,16 +80,6 @@ class NgramCountRepository(Protocol):
     def add_counts(
         self,
         counts: Counter[NgramKey],
-        *,
-        lang: str,
-        corpus: str,
-        fold_nasal_letters: bool,
-    ) -> None:
-        raise NotImplementedError
-
-    def add_tagged_counts(
-        self,
-        counts: Counter[TaggedNgramKey],
         *,
         lang: str,
         corpus: str,

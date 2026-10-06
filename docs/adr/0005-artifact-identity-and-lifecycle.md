@@ -6,9 +6,9 @@ Status: accepted
 
 Every newly produced corpus and tagged artifact has a versioned manifest with
 `writing` or `complete` state, SHA-256 content/shard checksums, immutable
-`artifact_id`, semantic configuration, counts and provenance. Consumers reject
-incomplete annotated artifacts by default. An explicitly unsafe recovery flag
-is required to consume an unmanifested tagged stream.
+`artifact_id`, semantic configuration, counts and provenance. Tagging readers
+validate annotated artifacts within that independent subsystem. `sp_ngrams`
+rejects annotated input entirely.
 
 Large source corpora are gzip JSONL directories with independently committed
 shards. A sibling `.part` directory and its writing manifest are resumable;
@@ -32,5 +32,5 @@ Portuguese nasal vowels, fold for the compact semordnilap key as before.
 - Direct collection extraction cannot accidentally consume an interrupted or
   superseded child merely because it is present on disk.
 - Concurrent writers fail before mutating an artifact.
-- Existing single-file source corpora and tagged JSONL v1 remain readable and
-  receive computed identities when no historical manifest exists.
+- Existing single-file source corpora remain readable by the raw n-gram
+  adapter. Tagged JSONL v1 remains readable only by the tagging subsystem.

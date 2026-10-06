@@ -14,14 +14,17 @@ selected corpus adapter. A collection uses its own artifact ID while the
 adapter supplies the exact ordered child shards. Existing generic `raw`
 extraction keeps its historical policy identity.
 
-Text counts, UPOS counts, the chunk ledger and the run checkpoint are written
-in one DuckDB transaction. Replaying a matching committed chunk is a no-op;
-reusing its ID with different content fails. Final totals are built as a new
-validated generation and become active in the same transaction. Successful
-finalization removes staging unless retention is explicitly requested.
+Text counts, the chunk ledger and the run checkpoint are written in one
+DuckDB transaction. Replaying a matching committed chunk is a no-op; reusing
+its ID with different content fails. Final totals are built as a new validated
+generation and become active in the same transaction. Successful finalization
+removes staging unless retention is explicitly requested.
 
-New databases use schema version 2. Existing databases require the explicit
-`sp_ngrams db migrate` operation; read-only inspection never migrates. When an
+New databases use schema version 3 and store only textual counts plus
+`has_punctuation`. Existing databases require the explicit
+`sp_ngrams db migrate` operation; v0/v1 gain `has_punctuation=false`, while v2
+keeps textual rows and drops all UPOS tables. Read-only inspection never
+migrates, and versions newer than the supported one are rejected. When an
 alias resolves to multiple immutable datasets, readers require `dataset_id`.
 TSV exports use a partial file, checksum manifest and atomic promotion.
 

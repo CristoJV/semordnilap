@@ -1,6 +1,9 @@
 # ADR 0003: Separate UPOS distribution relations
 
-Status: accepted
+Status: superseded by [ADR 0009](0009-text-only-ngram-schema-v3.md)
+
+This record describes the former schema v2 design. Schema v3 removes every
+UPOS relation and export field.
 
 ## Decision
 

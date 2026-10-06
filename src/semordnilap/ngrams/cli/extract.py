@@ -113,18 +113,10 @@ def add_counting_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--format",
         dest="input_format",
-        choices=["auto", "txt", "jsonl", "ud-jsonl"],
+        choices=["auto", "txt", "jsonl"],
         default="auto",
     )
     parser.add_argument("--text-field", default="text")
-    parser.add_argument(
-        "--allow-incomplete-input",
-        action="store_true",
-        help=(
-            "Allow annotated JSONL without a complete artifact manifest. "
-            "Unsafe; intended only for explicit recovery."
-        ),
-    )
     parser.add_argument(
         "--limit-docs",
         type=int,
@@ -273,7 +265,10 @@ def build_argparser() -> argparse.ArgumentParser:
     )
     migrate_parser = db_subparsers.add_parser(
         "migrate",
-        help="Explicitly migrate a legacy DuckDB schema in place.",
+        help=(
+            "Migrate DuckDB to text-only schema v3, preserving textual "
+            "counts and dropping UPOS tables."
+        ),
     )
     add_db_path(migrate_parser)
     return parser
@@ -376,6 +371,11 @@ def command_from_args(args: argparse.Namespace) -> ExtractNgramsCommand:
         args.text_field = resolved.text_field
         args.corpus = resolved.corpus
         args.source_adapter = resolved.adapter
+        if resolved.input_format == "ud-jsonl":
+            raise ValueError(
+                "Annotated ud-jsonl input is no longer supported by "
+                "sp_ngrams; extract directly from the source corpus"
+            )
         validate_counting_args(args)
     if args.command == "export":
         validate_export_args(args)
@@ -411,7 +411,6 @@ def command_from_args(args: argparse.Namespace) -> ExtractNgramsCommand:
             and not getattr(args, "no_compact_after_count", False)
         ),
         policy=policy_from_args(args),
-        allow_incomplete_input=getattr(args, "allow_incomplete_input", False),
         dataset_id=getattr(args, "dataset_id", None),
         source_adapter=getattr(args, "source_adapter", "raw"),
         input_files=getattr(args, "input_files", ()),
@@ -438,7 +437,10 @@ def log_stats(repository: DuckDbNgramCountRepository, args) -> None:
         for row in stats["totals_by_n"]
     }
 
-    lines = ["N-gram DuckDB stats"]
+    lines = [
+        "N-gram DuckDB stats",
+        f"schema_version: {stats['schema_version']}",
+    ]
     filters = []
     if args.lang:
         filters.append(f"lang={args.lang}")

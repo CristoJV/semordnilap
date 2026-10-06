@@ -1,4 +1,4 @@
-# Pipeline completo: corpus, UPOS y n-gramas
+# Pipeline completo: corpus y n-gramas
 
 ## 1. Instalar
 
@@ -112,102 +112,21 @@ fijarlo expresamente deja más clara la operación. Los aliases predeterminados
 son `wikisource_<fecha>`, `corpusnos` para una colección y
 `corpusnos_<config>` para un único artefacto; `--corpus` puede sustituirlos.
 
-La puntuación se conserva y nunca se cruzan documentos. Como no existen
-anotaciones, `upos_counts` queda vacío y `cross_sentence_count` vale cero. La
+La puntuación se conserva, se registra `has_punctuation` y nunca se cruzan
+documentos. No se persisten UPOS ni un indicador de cruce de frase. La
 extracción sigue siendo transaccional, reanudable e idempotente en DuckDB.
+Los artefactos `ud-jsonl` producidos por la utilidad independiente `sp_tag` no
+son entradas aceptadas por `sp_ngrams`.
 
-## 4. Opcional: enriquecer con UPOS
+## 4. Inspeccionar, migrar y exportar
 
-Use esta rama sólo si necesita distribuciones UPOS contextuales o distinguir
-ventanas que cruzan frases.
-
-### Descargar y comprobar Stanza
-
-```bash
-uv run sp_tag download \
-  --langs es gl \
-  --model-dir data/models/stanza
-
-uv run sp_tag smoke \
-  --langs es gl \
-  --model-dir data/models/stanza
-```
-
-El smoke test carga modelos reales, anota una frase por idioma e imprime el
-digest exacto de cada conjunto de modelos.
-
-### Etiquetar
+Las bases nuevas usan el esquema textual v3. Para una base anterior ejecute
+una migración explícita; conserva recuentos textuales y elimina las tablas UPOS:
 
 ```bash
-uv run sp_tag annotate \
-  --input data/corpus/wikisource/wikisource_es_20231201 \
-  --format jsonl \
-  --text-field text \
-  --id-field id \
-  --lang es \
-  --model-dir data/models/stanza \
-  --out data/tagged/wikisource_es_20231201
-```
-
-Repítase con `gl`. Una ejecución nueva usa `ud-jsonl-v2`: directorio con
-shards `.ud.jsonl.gz`, offsets absolutos, UPOS, rasgos UD, ordinales y
-checksums. El perfil `compact` es el predeterminado; `--profile full` añade
-lema y XPOS.
-
-La barra muestra documentos, tokens, shards y cuarentenas. Durante una llamada
-larga a Stanza se emite un heartbeat cada 30 segundos; se cambia con
-`--heartbeat-seconds`.
-
-#### Documentos largos y errores
-
-Por defecto, documentos mayores de 250 000 caracteres se dividen de forma
-determinista en límites de párrafo, frase o espacio. Los resultados recuperan
-offsets globales y el manifiesto conserva los límites. Un tramo sin ningún
-límite seguro se cuarentena junto al motivo y el pipeline continúa. Opciones:
-
-```text
---max-document-chars N
---on-document-error quarantine|fail
---shard-docs N
-```
-
-#### Reanudar
-
-```bash
-uv run sp_tag annotate <los mismos argumentos> --resume
-```
-
-V2 sólo reabre el último cursor confirmado y nunca deserializa shards ya
-finalizados. Si existe una parcial v1 de una ejecución anterior, `auto` la
-detecta y usa el protocolo v1: checkpoint de offsets y, una única vez para
-checkpoints antiguos, indexación visible de la parcial. Puede fijarse
-`--output-format ud-jsonl-v1` expresamente. No use `--force` para un resume.
-
-### Extraer n-gramas desde tagged
-
-```bash
-uv run sp_ngrams extract \
-  --input data/tagged/wikisource_es_20231201 \
-  --format auto \
-  --lang es \
-  --corpus wikisource_20231201 \
-  --max-n 3 \
-  --flush-unique-ngrams 250000 \
+uv run sp_ngrams db migrate \
   --db-path data/ngrams/counts.duckdb
 ```
-
-`auto` reconoce el esquema UD; por tanto no puede perder UPOS mediante una
-retokenización silenciosa. La puntuación se conserva por defecto: aparecen
-superficies como `niña, el` y `camino. Antes`, incluso al cruzar frases. Nunca
-se cruza un límite de documento. `--omit-punctuation` sólo existe como modo de
-compatibilidad.
-
-Cada segmento se confirma con recuentos, distribución UPOS y checkpoint en
-una transacción. Repetir el comando es un no-op si la identidad ya está
-completa; una política o fuente distinta produce otro `dataset_id`. Un
-`--limit-docs` produce una identidad de muestra separada.
-
-## 5. Inspeccionar y exportar
 
 ```bash
 uv run sp_ngrams db stats \
