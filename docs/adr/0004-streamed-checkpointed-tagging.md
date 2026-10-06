@@ -4,6 +4,10 @@ Status: accepted
 
 ## Decision
 
+Tagging is an optional enrichment stage for consumers that need contextual
+UPOS/FEATS. It is not a prerequisite for lexical n-gram extraction; source
+adapters can stream downloaded corpus shards directly into the n-gram engine.
+
 Legacy v1 writes one annotated document per JSONL line to a persistent `.part` file. Flush
 and `fsync` it every configurable number of completed documents (10 by
 default), recording compatible run metadata in `.part.meta.json`. Promote the
@@ -39,6 +43,8 @@ document, after recovery has finished.
   resumes are O(1) apart from source inventory/counting.
 - Source and Stanza model files have cryptographic identities in new
   checkpoints and final manifests. Legacy checkpoints remain readable.
+- Workloads that need only lexical frequencies can omit this entire storage
+  lifecycle without weakening raw extraction resumability in DuckDB.
 
 New jobs default to v2 gzip shards. Each completed shard records ordered
 document ordinals, source cursor and checksum before advancing the checkpoint.

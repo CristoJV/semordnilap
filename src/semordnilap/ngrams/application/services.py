@@ -108,6 +108,8 @@ def count_corpus(
         "text_field": command.text_field,
         "limit_docs": command.limit_docs,
     }
+    if command.source_adapter != "raw":
+        policy_value["source_adapter"] = command.source_adapter
     policy_hash = stable_id("policy", policy_value)
     dataset_id = stable_id(
         "ngram-dataset",
@@ -146,13 +148,18 @@ def count_corpus(
         )
         description = "Extracting annotated corpus"
     else:
+        source_paths = command.input_files or (command.input_path,)
         documents = (
             (str(index), text, text)
             for index, text in enumerate(
-                iter_texts(
-                    command.input_path,
-                    command.input_format,
-                    command.text_field,
+                (
+                    text
+                    for source_path in source_paths
+                    for text in iter_texts(
+                        source_path,
+                        command.input_format,
+                        command.text_field,
+                    )
                 ),
                 1,
             )

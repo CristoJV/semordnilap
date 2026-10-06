@@ -15,6 +15,11 @@ shards. A sibling `.part` directory and its writing manifest are resumable;
 only a complete artifact is atomically promoted. Writers hold a non-blocking
 POSIX advisory lock containing PID, host and start time.
 
+A source-collection manifest is the authoritative membership list for direct
+n-gram extraction. Corpus adapters resolve only complete child artifacts whose
+IDs occur in that list; stale directories, unlisted artifacts and `.part`
+directories below the collection root are never scanned implicitly.
+
 Normalization policy `unicode-nfc-casefold-v2` preserves `ñ`; only the
 explicit `fold_nasal_letters` policy maps it to `n`. Other accents, including
 Portuguese nasal vowels, fold for the compact semordnilap key as before.
@@ -24,6 +29,8 @@ Portuguese nasal vowels, fold for the compact semordnilap key as before.
 - Dataset revision, rejected rows, shard order and checksums are reproducible.
 - Empty source records are rejected once and no longer skew tagging progress.
 - Interrupted downloads restart after the last committed shard.
+- Direct collection extraction cannot accidentally consume an interrupted or
+  superseded child merely because it is present on disk.
 - Concurrent writers fail before mutating an artifact.
 - Existing single-file source corpora and tagged JSONL v1 remain readable and
   receive computed identities when no historical manifest exists.

@@ -35,6 +35,8 @@ class ExtractNgramsCommand:
     policy: NgramExtractionPolicy
     allow_incomplete_input: bool = False
     dataset_id: str | None = None
+    source_adapter: str = "raw"
+    input_files: tuple[Path, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.corpus.strip():

@@ -12,8 +12,11 @@ from semordnilap.ngrams.application import (
     run_extraction,
 )
 from semordnilap.ngrams.domain import NgramExtractionPolicy
-from semordnilap.ngrams.infrastructure import DuckDbNgramCountRepository
-from semordnilap.utils.io import detect_corpus_format
+from semordnilap.ngrams.infrastructure import (
+    SOURCE_ADAPTERS,
+    DuckDbNgramCountRepository,
+    resolve_corpus_input,
+)
 from semordnilap.utils.artifacts import ArtifactLock
 
 logging.basicConfig(
@@ -98,6 +101,15 @@ def add_policy_options(parser: argparse.ArgumentParser) -> None:
 
 def add_counting_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument(
+        "--adapter",
+        choices=SOURCE_ADAPTERS,
+        default="auto",
+        help=(
+            "Source adapter. auto recognizes downloaded Wikisource and "
+            "CorpusNOS manifests; raw keeps the generic reader."
+        ),
+    )
     parser.add_argument(
         "--format",
         dest="input_format",
@@ -199,7 +211,7 @@ def build_argparser() -> argparse.ArgumentParser:
         help="Extract n-gram counts into DuckDB and compact totals.",
     )
     add_db_path(extract_parser)
-    add_lang_corpus(extract_parser, lang_required=True)
+    add_lang_corpus(extract_parser, lang_required=True, corpus_default=None)
     add_policy_options(extract_parser)
     add_counting_options(extract_parser)
 
@@ -350,8 +362,21 @@ def command_from_args(args: argparse.Namespace) -> ExtractNgramsCommand:
     validate_max_n(args)
 
     if args.command == "extract":
+        resolved = resolve_corpus_input(
+            args.input,
+            adapter=args.adapter,
+            lang=args.lang,
+            corpus=args.corpus,
+            requested_format=args.input_format,
+            text_field=args.text_field,
+        )
+        args.input = resolved.path
+        args.input_files = resolved.files
+        args.input_format = resolved.input_format
+        args.text_field = resolved.text_field
+        args.corpus = resolved.corpus
+        args.source_adapter = resolved.adapter
         validate_counting_args(args)
-        args.input_format = detect_corpus_format(args.input, args.input_format)
     if args.command == "export":
         validate_export_args(args)
 
@@ -388,6 +413,8 @@ def command_from_args(args: argparse.Namespace) -> ExtractNgramsCommand:
         policy=policy_from_args(args),
         allow_incomplete_input=getattr(args, "allow_incomplete_input", False),
         dataset_id=getattr(args, "dataset_id", None),
+        source_adapter=getattr(args, "source_adapter", "raw"),
+        input_files=getattr(args, "input_files", ()),
     )
 
 
@@ -544,6 +571,7 @@ def main(argv: list[str] | None = None) -> int:
         "max_results=%d export_n=%d export_norm_len=%d..%d "
         "export_source=%s export_log_every=%d "
         "chunk_docs=%d flush_unique_ngrams=%d "
+        "adapter=%s "
         "omit_punctuation=%s "
         "reset=%s export_only=%s export_after_count=%s delete_only=%s "
         "compact_only=%s compact_n=%d compact_after_count=%s",
@@ -559,6 +587,7 @@ def main(argv: list[str] | None = None) -> int:
         command.export_log_every,
         command.chunk_docs,
         command.flush_unique_ngrams,
+        command.source_adapter,
         command.policy.omit_punctuation,
         command.reset,
         command.export_only,

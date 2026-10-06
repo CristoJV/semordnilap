@@ -13,6 +13,8 @@
   immutable extraction identities and validated generations.
 - [ADR 0007](0007-tagged-v2-and-core-scope.md): compressed tagged shards,
   long-document policy and reduced supported scope.
+- [ADR 0008](0008-direct-source-corpus-adapters.md): manifest-aware direct
+  Wikisource and CorpusNOS extraction without persisted tagging.
 
 These records describe accepted behavior. Proposed replacements or migrations
 belong in [RFCs](../rfc/README.md) until accepted.

@@ -66,7 +66,62 @@ Cada configuración produce un directorio `corpusnos_<config>/`. La descarga
 es streaming, comprimida y dividida en shards; `--resume` conserva artefactos
 ya completos y continúa los parciales.
 
-## 3. Descargar y comprobar Stanza
+## 3. Extraer directamente desde el corpus
+
+Ésta es la ruta recomendada cuando sólo se necesitan frecuencias y superficies
+textuales. No ejecuta Stanza ni crea un corpus etiquetado intermedio.
+
+Wikisource selecciona dentro de la colección exactamente el artefacto cuyo
+idioma coincide con `--lang`:
+
+```bash
+uv run sp_ngrams extract \
+  --adapter wikisource \
+  --input data/corpus/wikisource \
+  --lang es \
+  --max-n 3 \
+  --flush-unique-ngrams 250000 \
+  --db-path data/ngrams/counts.duckdb
+```
+
+CorpusNÓS sólo admite `--lang gl`. Una colección completa procesa exactamente
+las configuraciones enumeradas en su manifest:
+
+```bash
+uv run sp_ngrams extract \
+  --adapter corpusnos \
+  --input data/corpus/corpusnos \
+  --lang gl \
+  --max-n 3 \
+  --flush-unique-ngrams 250000 \
+  --db-path data/ngrams/counts.duckdb
+```
+
+También puede procesarse una sola configuración:
+
+```bash
+uv run sp_ngrams extract \
+  --adapter corpusnos \
+  --input data/corpus/corpusnos/corpusnos_dta_books \
+  --lang gl \
+  --db-path data/ngrams/counts.duckdb
+```
+
+`--adapter auto` es el valor predeterminado y reconoce los manifests, pero
+fijarlo expresamente deja más clara la operación. Los aliases predeterminados
+son `wikisource_<fecha>`, `corpusnos` para una colección y
+`corpusnos_<config>` para un único artefacto; `--corpus` puede sustituirlos.
+
+La puntuación se conserva y nunca se cruzan documentos. Como no existen
+anotaciones, `upos_counts` queda vacío y `cross_sentence_count` vale cero. La
+extracción sigue siendo transaccional, reanudable e idempotente en DuckDB.
+
+## 4. Opcional: enriquecer con UPOS
+
+Use esta rama sólo si necesita distribuciones UPOS contextuales o distinguir
+ventanas que cruzan frases.
+
+### Descargar y comprobar Stanza
 
 ```bash
 uv run sp_tag download \
@@ -81,7 +136,7 @@ uv run sp_tag smoke \
 El smoke test carga modelos reales, anota una frase por idioma e imprime el
 digest exacto de cada conjunto de modelos.
 
-## 4. Etiquetar
+### Etiquetar
 
 ```bash
 uv run sp_tag annotate \
@@ -103,7 +158,7 @@ La barra muestra documentos, tokens, shards y cuarentenas. Durante una llamada
 larga a Stanza se emite un heartbeat cada 30 segundos; se cambia con
 `--heartbeat-seconds`.
 
-### Documentos largos y errores
+#### Documentos largos y errores
 
 Por defecto, documentos mayores de 250 000 caracteres se dividen de forma
 determinista en límites de párrafo, frase o espacio. Los resultados recuperan
@@ -116,7 +171,7 @@ límite seguro se cuarentena junto al motivo y el pipeline continúa. Opciones:
 --shard-docs N
 ```
 
-### Reanudar
+#### Reanudar
 
 ```bash
 uv run sp_tag annotate <los mismos argumentos> --resume
@@ -128,7 +183,7 @@ detecta y usa el protocolo v1: checkpoint de offsets y, una única vez para
 checkpoints antiguos, indexación visible de la parcial. Puede fijarse
 `--output-format ud-jsonl-v1` expresamente. No use `--force` para un resume.
 
-## 5. Extraer n-gramas
+### Extraer n-gramas desde tagged
 
 ```bash
 uv run sp_ngrams extract \
@@ -152,7 +207,7 @@ una transacción. Repetir el comando es un no-op si la identidad ya está
 completa; una política o fuente distinta produce otro `dataset_id`. Un
 `--limit-docs` produce una identidad de muestra separada.
 
-## 6. Inspeccionar y exportar
+## 5. Inspeccionar y exportar
 
 ```bash
 uv run sp_ngrams db stats \

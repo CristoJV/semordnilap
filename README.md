@@ -1,14 +1,16 @@
 # Semordnilap
 
-Pipeline reproducible para construir n-gramas con información contextual UPOS
-en español y gallego.
+Pipeline reproducible para construir n-gramas en español y gallego,
+directamente desde corpus fuente o con información contextual UPOS opcional.
 
 ```mermaid
 flowchart LR
     H[HF corpus revision] --> C[Corpus shards]
-    C --> T[Stanza ES/GL]
+    C --> R[Raw adapter]
+    C -. optional .-> T[Stanza ES/GL]
     T --> U[UD v2 gzip shards]
-    U --> N[Streaming n-grams]
+    R --> N[Streaming n-grams]
+    U --> N
     N --> D[(DuckDB generations)]
     D --> S[Optional search]
 ```
@@ -37,6 +39,8 @@ manifiestos, recuperación y almacenamiento.
 
 Las decisiones principales son:
 
+- Wikisource y CorpusNÓS se pueden extraer directamente sin generar un corpus
+  etiquetado intermedio;
 - la puntuación se conserva por defecto y las ventanas pueden cruzar frases,
   pero nunca documentos;
 - el tagging se realiza sobre el contexto completo o sobre fragmentos largos
@@ -50,4 +54,4 @@ Las decisiones principales son:
 
 Documentación: [mapa](docs/README.md), [ADRs](docs/adr/README.md),
 [RFC implementado](docs/rfc/0001-core-pipeline-hardening.md) y
-[plan de implementación](docs/plan/0002-core-pipeline-hardening.md).
+[plan actual](docs/plan/0003-direct-corpus-ngram-adapters.md).

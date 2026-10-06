@@ -1,4 +1,5 @@
 import gzip
+import io
 import json
 
 import pytest
@@ -198,3 +199,63 @@ def test_corpusnos_run_exports_selected_config_and_collection(
     collection = read_complete_manifest(tmp_path, verify_checksums=False)
     assert collection["configs"] == ["dta_books"]
     assert collection["artifacts"][0]["config"] == "dta_books"
+
+
+def test_corpusnos_loader_accepts_different_jsonl_schemas(monkeypatch):
+    files = {
+        "datasets/proxectonos/corpusnos@main/"
+        "data_transfer_agreement/research_articles/a.jsonl": (
+            '{"id": 1, "text": "PDF", "tokens": 1, "abstract_gl": "resumo"}\n'
+        ),
+        "datasets/proxectonos/corpusnos@main/"
+        "data_transfer_agreement/research_articles/b.jsonl": (
+            '{"doc_id": "doi:2", "text": "XML", "language": "gl", '
+            '"authors": [{"name": "A"}]}\n'
+        ),
+    }
+
+    class FakeApi:
+        def list_repo_files(self, *args, **kwargs):
+            return [
+                "unrelated.jsonl",
+                "data_transfer_agreement/research_articles/b.jsonl",
+                "data_transfer_agreement/research_articles/a.jsonl",
+            ]
+
+    class FakeFilesystem:
+        def open(self, path, *args, **kwargs):
+            return io.StringIO(files[path])
+
+    monkeypatch.setattr(corpusnos_module, "HfApi", FakeApi)
+    monkeypatch.setattr(corpusnos_module, "HfFileSystem", FakeFilesystem)
+
+    loaded = corpusnos_module.load_hf_dataset(
+        "proxectonos/corpusnos",
+        "dta_research_articles",
+        None,
+        revision="main",
+        streaming=True,
+    )
+
+    assert list(corpusnos_module._rows(loaded)) == [
+        {
+            "id": 1,
+            "url": None,
+            "title": None,
+            "text": "PDF",
+            "num_words": None,
+            "pyplexity_score": None,
+            "lang": None,
+            "num_tokens": 1,
+        },
+        {
+            "id": "doi:2",
+            "url": None,
+            "title": None,
+            "text": "XML",
+            "num_words": None,
+            "pyplexity_score": None,
+            "lang": "gl",
+            "num_tokens": None,
+        },
+    ]

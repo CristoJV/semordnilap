@@ -4,8 +4,43 @@
 
 La clave real de un dataset es
 `source artifact_id + extraction policy hash + lang + corpus`. La política
-incluye normalización, superficie, límites, puntuación y `limit_docs`.
+incluye normalización, superficie, límites, puntuación, `limit_docs` y, para
+fuentes gestionadas, el adaptador seleccionado.
 `lang/corpus` es sólo un alias legible.
+
+## Adaptadores de corpus fuente
+
+`extract` procesa directamente los shards descargados, sin Stanza ni un
+dataset etiquetado intermedio. `--lang` sigue siendo obligatorio para que la
+política lingüística sea explícita. `--adapter auto` es el valor por defecto,
+pero puede fijarse el adaptador en operaciones reproducibles:
+
+```bash
+# el manifest de colección selecciona sólo el artefacto español
+uv run sp_ngrams extract --adapter wikisource \
+  --input data/corpus/wikisource --lang es \
+  --db-path data/ngrams/counts.duckdb
+
+# procesa la colección completa de configuraciones descargadas
+uv run sp_ngrams extract --adapter corpusnos \
+  --input data/corpus/corpusnos --lang gl \
+  --db-path data/ngrams/counts.duckdb
+
+# procesa una única configuración CorpusNÓS
+uv run sp_ngrams extract --adapter corpusnos \
+  --input data/corpus/corpusnos/corpusnos_dta_books --lang gl \
+  --db-path data/ngrams/counts.duckdb
+```
+
+Wikisource deriva por defecto un alias como `wikisource_20231201`; un
+artefacto CorpusNÓS individual usa `corpusnos_<config>` y la colección usa
+`corpusnos`. `--corpus NOMBRE` permite sustituirlos. El adaptador raw genérico
+permanece disponible con `--adapter raw` y las opciones `--format` y
+`--text-field` existentes.
+
+La ruta directa genera recuentos textuales, pero no UPOS:
+`upos_counts` queda vacío y `cross_sentence_count` vale cero. Use una entrada
+`ud-jsonl` etiquetada sólo cuando necesite esa evidencia contextual.
 
 La extracción genera ventanas mediante iteradores y mantiene como máximo el
 buffer configurado con `--flush-unique-ngrams`, incluso dentro de un único

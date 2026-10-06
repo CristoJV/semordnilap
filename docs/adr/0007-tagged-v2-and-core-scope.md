@@ -20,10 +20,17 @@ utilities and optional modern DuckDB search/scoring. Desktop UI, review,
 phrases, FreeLing, embeddings, candidate/dictionary extraction and legacy
 search were removed with their commands, tests and dependencies.
 
+The supported pipeline now branches after corpus acquisition: direct raw
+n-gram extraction is the low-storage default when lexical counts suffice;
+tagged v2 is the optional enrichment branch for contextual UPOS evidence.
+Both branches converge on the same idempotent DuckDB generation storage.
+
 ## Consequences
 
 - Large tagged outputs have smaller failure domains and bounded document size.
 - ES/GL model compatibility has an explicit real-model smoke command.
-- The default install exposes four commands and no UI/embedding/phrase stack.
+- The default install exposes `sp_corpus`, `sp_tag`, `sp_ngrams` and optional
+  `sp_search_ngrams`; the old `sp_corpus_wikisource` entry point remains only
+  as a compatibility alias.
 - Historical user data and active partial files are never deleted by source
   cleanup.

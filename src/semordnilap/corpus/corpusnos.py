@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 from pathlib import Path
 from typing import Iterable
+
+from huggingface_hub import HfApi, HfFileSystem, hf_hub_download
 
 from semordnilap.corpus.wikisource import export_rows
 from semordnilap.utils.artifacts import (
@@ -44,6 +47,18 @@ SUBSET_CONFIGS = {
 ALL_CONFIGS = tuple(
     config for configs in SUBSET_CONFIGS.values() for config in configs
 )
+CONFIG_PREFIXES = {
+    "dta_books": "data_transfer_agreement/books/",
+    "dta_research_articles": "data_transfer_agreement/research_articles/",
+    "dta_press_and_blogs": "data_transfer_agreement/press_and_blogs/",
+    "dta_encyclopedic": "data_transfer_agreement/encyclopedic/",
+    "dta_governmental": "data_transfer_agreement/governmental/",
+    "dta_web_contents": "data_transfer_agreement/web_contents/",
+    "public_data_press_and_blogs": "public_data/press_and_blogs/",
+    "public_data_encyclopedic": "public_data/encyclopedic/",
+    "public_data_web_crawls": "public_data/web_crawls/",
+    "public_data_translation_corpora": "public_data/translation_corpora/",
+}
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
@@ -110,34 +125,54 @@ def load_hf_dataset(
     revision: str,
     streaming: bool,
 ):
-    try:
-        from datasets import Features, Value, load_dataset
-    except ImportError:
-        raise ImportError("Missing dependency: datasets.") from None
+    prefix = CONFIG_PREFIXES[config]
+    files = sorted(
+        path
+        for path in HfApi().list_repo_files(
+            dataset_name, repo_type="dataset", revision=revision
+        )
+        if path.startswith(prefix) and path.endswith(".jsonl")
+    )
+    if not files:
+        raise FileNotFoundError(
+            f"No JSONL files found for CorpusNOS config {config!r} "
+            f"at revision {revision!r}"
+        )
 
-    # Some CorpusNOS files contain the optional num_tokens column while the
-    # Hub metadata omits it. Supplying the union prevents streaming casts from
-    # failing when files within one configuration have slightly different
-    # optional fields.
-    features = Features(
-        {
-            "id": Value("int64"),
-            "text": Value("string"),
-            "num_words": Value("int64"),
-            "pyplexity_score": Value("float64"),
-            "lang": Value("string"),
-            "num_tokens": Value("int64"),
-        }
-    )
-    return load_dataset(
-        dataset_name,
-        config,
-        split="train",
-        cache_dir=str(cache_dir) if cache_dir else None,
-        revision=revision,
-        streaming=streaming,
-        features=features,
-    )
+    def rows():
+        filesystem = HfFileSystem() if streaming else None
+        for filename in files:
+            if streaming:
+                path = f"datasets/{dataset_name}@{revision}/{filename}"
+                assert filesystem is not None
+                stream_context = filesystem.open(path, "r", encoding="utf-8")
+            else:
+                path = hf_hub_download(
+                    dataset_name,
+                    filename,
+                    repo_type="dataset",
+                    revision=revision,
+                    cache_dir=str(cache_dir) if cache_dir else None,
+                )
+                stream_context = Path(path).open("r", encoding="utf-8")
+            with stream_context as stream:
+                for lineno, line in enumerate(stream, 1):
+                    if not line.strip():
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        raise ValueError(
+                            f"Invalid JSONL at {filename}:{lineno}"
+                        ) from exc
+                    if not isinstance(row, dict):
+                        raise ValueError(
+                            f"JSONL record must be an object at "
+                            f"{filename}:{lineno}"
+                        )
+                    yield row
+
+    return rows()
 
 
 def _rows(rows: Iterable[dict]) -> Iterable[dict]:
@@ -145,12 +180,14 @@ def _rows(rows: Iterable[dict]) -> Iterable[dict]:
         # export_rows deliberately stores a compact, consumer-neutral record.
         # Keep useful CorpusNOS metrics without coupling later stages to them.
         yield {
-            "id": row.get("id"),
+            "id": row.get("id", row.get("doc_id")),
+            "url": row.get("url", row.get("source_url")),
+            "title": row.get("title"),
             "text": row.get("text"),
             "num_words": row.get("num_words"),
             "pyplexity_score": row.get("pyplexity_score"),
-            "lang": row.get("lang"),
-            "num_tokens": row.get("num_tokens"),
+            "lang": row.get("lang", row.get("language")),
+            "num_tokens": row.get("num_tokens", row.get("tokens")),
         }
 
 

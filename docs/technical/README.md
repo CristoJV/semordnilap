@@ -1,6 +1,6 @@
 # Arquitectura técnica
 
-Estado implementado a 2026-10-04.
+Estado implementado a 2026-10-05.
 
 ## Componentes
 
@@ -8,9 +8,11 @@ Estado implementado a 2026-10-04.
 flowchart LR
     HF[HF revision] --> CA[corpus adapter]
     CA --> CS[(source gzip shards)]
-    CS --> ST[Stanza adapter]
+    CS --> RA[raw source adapter]
+    CS -. optional .-> ST[Stanza adapter]
     ST --> UD[provider-neutral UD domain]
     UD --> TS[(tagged v2 shards)]
+    RA --> EX[streaming windows]
     TS --> EX[streaming windows]
     EX --> TX[transactional chunks]
     TX --> FG[(active DuckDB generation)]
@@ -25,6 +27,7 @@ flowchart LR
 | Tagging application | `tagging/application.py`, `tagging/sharded.py` | checkpoints v1, shards v2, splitting y cuarentena |
 | N-gram domain | `ngrams/domain/*` | tokenización Unicode, ventanas y normalización |
 | N-gram application | `ngrams/application/*` | identidad, chunks, resume y export |
+| N-gram source adapters | `ngrams/infrastructure/corpus_adapters.py` | resolución segura de colecciones Wikisource/CorpusNÓS, idioma y shards |
 | Storage | `ngrams/infrastructure/repositories.py` | migraciones y generaciones DuckDB |
 | Search | `search/*` | consumidor opcional sólo lectura |
 | Shared | `utils/artifacts.py`, `utils/io.py`, `utils/text.py` | checksums, locks, manifests e I/O |
@@ -45,7 +48,9 @@ stateDiagram-v2
 Todo artefacto nuevo contiene schema/version, estado, configuración semántica,
 provenance, checksums y `artifact_id`. Los writers mantienen un lock POSIX no
 bloqueante con PID/host. Un consumidor rechaza tagged data incompleto salvo
-`--allow-incomplete-input` explícito.
+`--allow-incomplete-input` explícito. Los adaptadores raw sólo seleccionan
+hijos completos enumerados por el manifest de colección y no recorren
+directorios `.part` o artefactos no declarados.
 
 Los corpus y tagged v2 son directorios de shards gzip confirmados
 independientemente. Un fallo sólo invalida el shard temporal. La promoción del
@@ -70,15 +75,16 @@ límites; tramos indivisibles o errores pueden cuarentenarse.
 
 ## Semántica de ventanas
 
-El etiquetado precede a cualquier extracción. El extractor recorre todos los
-tokens lexicales del documento con una deque de tamaño `max_n`; por ello
-conserva el UPOS contextual y permite ventanas entre frases. El span desde el
-primer hasta el último token conserva la puntuación intermedia. Un límite de
-documento siempre vacía la ventana.
+El extractor raw recorre spans lexicales Unicode directamente sobre cada
+documento. La rama etiquetada recorre los tokens UD y conserva su UPOS
+contextual. Ambas usan una deque de tamaño `max_n`, preservan la puntuación
+intermedia entre el primer y último token y vacían siempre la ventana en cada
+límite de documento.
 
 Raw y tagged comparten la misma superficie canónica. La identidad textual y
 la evidencia gramatical están separadas: una fila textual agregada se relaciona
-con varios patrones UPOS y sus frecuencias.
+con varios patrones UPOS y sus frecuencias sólo cuando la entrada era tagged.
+La ruta raw no fabrica evidencia gramatical.
 
 ## DuckDB v2
 

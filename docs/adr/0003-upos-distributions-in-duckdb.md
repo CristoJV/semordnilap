@@ -13,10 +13,13 @@ An ordinary token contributes one UPOS slot. A UD multi-word surface token
 joins the UPOS values of its underlying words with `+`, so the number of
 space-separated pattern slots continues to equal `n`.
 
+Direct raw extraction writes the same textual totals but no rows to the UPOS
+relations. An empty exported `upos_counts` and zero `cross_sentence_count`
+therefore mean "not observed from tagged input", not a claim about grammar.
+
 ## Consequences
 
 - Grammatical interpretations do not create duplicate textual n-grams.
 - Pattern counts remain queryable and compactable in SQL.
 - TSV export can expose a compact JSON distribution while DuckDB retains a
   normalized representation.
-

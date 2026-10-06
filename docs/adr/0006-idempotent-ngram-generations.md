@@ -9,6 +9,11 @@ every semantic extraction option. The language and corpus names are aliases,
 not identities. Each deterministic document segment is committed once under
 a unique chunk ID and digest.
 
+For manifest-aware source extraction, the policy hash also records the
+selected corpus adapter. A collection uses its own artifact ID while the
+adapter supplies the exact ordered child shards. Existing generic `raw`
+extraction keeps its historical policy identity.
+
 Text counts, UPOS counts, the chunk ledger and the run checkpoint are written
 in one DuckDB transaction. Replaying a matching committed chunk is a no-op;
 reusing its ID with different content fails. Final totals are built as a new
