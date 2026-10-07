@@ -131,6 +131,7 @@ Esto significa exactamente:
 | Tamaño | Acepta todos los valores de `n` disponibles. |
 | Longitud | No impone mínimo ni máximo a `norm_key`. |
 | Puntuación | Conserva superficies con y sin puntuación. |
+| Números | Conserva superficies con caracteres numéricos. |
 | Stopwords | Conserva n-gramas formados únicamente por stopwords. |
 | Palíndromos | Conserva pares con la misma clave normalizada. |
 | Texto idéntico | Conserva el mismo texto al buscar un dataset contra sí mismo. |
@@ -195,12 +196,19 @@ entre una palabra y una expresión:
 | `--filter-exclude-palindromes` | incluidos | Descarta pares donde `source_norm_key == target_norm_key`. |
 | `--filter-exclude-identical-text` | incluidos | Descarta el mismo texto cuando coinciden también idioma y corpus. |
 | `--filter-exclude-punctuation` | incluida | Descarta el par si cualquiera de sus superficies contiene puntuación. |
+| `--filter-exclude-numbers` | incluidos | Descarta el par si cualquiera de sus superficies contiene un carácter numérico Unicode. |
 | `--filter-exclude-all-stopword-ngrams` | incluidos | Descarta el candidato de cualquiera de los lados si todos sus tokens son stopwords conocidas para su idioma. |
 
 Los filtros de palíndromo y texto idéntico son independientes. Excluir texto
 idéntico no elimina dos superficies distintas que compartan clave. Excluir
 palíndromos elimina todas las parejas con claves iguales, sean o no idénticas
 sus superficies.
+
+El filtro de números reconoce cualquier carácter cuya categoría Unicode
+empieza por `N`. Incluye dígitos decimales (`0`–`9` y sus equivalentes en
+otros sistemas de escritura), números con superíndice como `²` y otros
+caracteres numéricos. Si aparece en cualquiera de las dos superficies, se
+descarta el par completo.
 
 El filtro de stopwords se evalúa en la búsqueda sobre `surface_display`. La
 superficie se tokeniza y solo se descarta cuando hay al menos un token y todos
@@ -386,7 +394,7 @@ descartado. Consulte las identidades y políticas mediante
 | `No extraction dataset exists` | Verificar `lang/corpus` con `db stats`. |
 | `Multiple policy identities` | Añadir `--src-dataset-id` o `--tgt-dataset-id`. |
 | `dataset is incomplete` | Ejecutar `db finalize` o reanudar la extracción. |
-| Cero filas | Quitar temporalmente filtros de count, longitud, n, puntuación o stopwords. |
+| Cero filas | Quitar temporalmente filtros de count, longitud, n, puntuación, números o stopwords. |
 | Faltan palabra-expresión | No fijar ambos tamaños, o usar `--filter-src-n 1 --filter-tgt-n 2`. |
 | Sobran claves iguales | Añadir `--filter-exclude-palindromes`. |
 | Sobran autorrelaciones exactas | Añadir `--filter-exclude-identical-text`. |
@@ -427,7 +435,7 @@ diferentes.
 ## 14. Mejoras pendientes
 
 La búsqueda ya dispone de salida atómica, manifiesto, filtros no destructivos
-de puntuación y stopwords, `dry-run`, progreso, distribución por tamaños y
+de puntuación, números y stopwords, `dry-run`, progreso, distribución por tamaños y
 límite opcional sin valor mágico. Permanecen como mejoras posibles:
 
 1. comparar automáticamente las políticas de extracción de source y target;

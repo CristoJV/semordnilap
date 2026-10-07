@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import unicodedata
 from pathlib import Path
 
 from semordnilap.ngrams.domain.filters import is_all_stopwords
@@ -15,6 +16,10 @@ FINAL_COUNTS_TABLE = "ngram_final_v2"
 
 def _surface_is_all_stopwords(text: str, lang: str) -> bool:
     return is_all_stopwords(tuple(tokenize_sentence(text)), lang)
+
+
+def _surface_has_number(text: str) -> bool:
+    return any(unicodedata.category(char).startswith("N") for char in text)
 
 
 class DuckDbSemordnilapSearchRepository:
@@ -44,6 +49,7 @@ class DuckDbSemordnilapSearchRepository:
                 "generation-based n-gram schema; migrate or re-extract it"
             )
         self._stopword_function_registered = False
+        self._number_function_registered = False
 
     def _ensure_stopword_function(self) -> None:
         if self._stopword_function_registered:
@@ -55,6 +61,17 @@ class DuckDbSemordnilapSearchRepository:
             "BOOLEAN",
         )
         self._stopword_function_registered = True
+
+    def _ensure_number_function(self) -> None:
+        if self._number_function_registered:
+            return
+        self._con.create_function(
+            "semordnilap_has_number",
+            _surface_has_number,
+            ["VARCHAR"],
+            "BOOLEAN",
+        )
+        self._number_function_registered = True
 
     def iter_pairs(self, policy: SearchPolicy):
         logger.info(
@@ -212,6 +229,8 @@ class DuckDbSemordnilapSearchRepository:
     def _search_inputs(self, policy: SearchPolicy):
         if policy.filter_exclude_all_stopword_ngrams:
             self._ensure_stopword_function()
+        if policy.filter_exclude_numbers:
+            self._ensure_number_function()
         source_dataset = self._resolve_dataset(
             lang=policy.source_lang,
             corpus=policy.source_corpus,
@@ -231,6 +250,7 @@ class DuckDbSemordnilapSearchRepository:
             min_norm_len=policy.filter_min_norm_len,
             max_norm_len=policy.filter_max_norm_len,
             exclude_punctuation=policy.filter_exclude_punctuation,
+            exclude_numbers=policy.filter_exclude_numbers,
             exclude_all_stopwords=policy.filter_exclude_all_stopword_ngrams,
         )
         tgt_sql, tgt_params = self._candidate_sql(
@@ -242,6 +262,7 @@ class DuckDbSemordnilapSearchRepository:
             min_norm_len=policy.filter_min_norm_len,
             max_norm_len=policy.filter_max_norm_len,
             exclude_punctuation=policy.filter_exclude_punctuation,
+            exclude_numbers=policy.filter_exclude_numbers,
             exclude_all_stopwords=policy.filter_exclude_all_stopword_ngrams,
         )
         return (
@@ -314,6 +335,7 @@ class DuckDbSemordnilapSearchRepository:
         min_norm_len: int | None,
         max_norm_len: int | None,
         exclude_punctuation: bool,
+        exclude_numbers: bool,
         exclude_all_stopwords: bool,
     ) -> tuple[str, list]:
         self._validate_complete_dataset(dataset)
@@ -331,6 +353,8 @@ class DuckDbSemordnilapSearchRepository:
             params.append(max_norm_len)
         if exclude_punctuation:
             where.append("NOT has_punctuation")
+        if exclude_numbers:
+            where.append("NOT semordnilap_has_number(surface_display)")
         if exclude_all_stopwords:
             where.append(
                 "NOT semordnilap_is_all_stopwords(surface_display, ?)"

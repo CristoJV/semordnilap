@@ -198,6 +198,7 @@ def test_search_cli_is_unrestricted_by_default_and_uses_filter_prefixes():
     assert command.policy.filter_target_n is None
     assert command.policy.filter_exclude_palindromes is False
     assert command.policy.filter_exclude_identical_text is False
+    assert command.policy.filter_exclude_numbers is False
     for option in (
         "--filter-min-src-count",
         "--filter-min-tgt-count",
@@ -209,6 +210,7 @@ def test_search_cli_is_unrestricted_by_default_and_uses_filter_prefixes():
         "--filter-exclude-palindromes",
         "--filter-exclude-identical-text",
         "--filter-exclude-punctuation",
+        "--filter-exclude-numbers",
         "--filter-exclude-all-stopword-ngrams",
     ):
         assert option in help_text
@@ -346,6 +348,47 @@ def test_search_filters_punctuation_and_all_stopword_ngrams(tmp_path):
             )
         )
     )
+    repository.close()
+
+
+def test_search_filters_surfaces_with_unicode_numbers(tmp_path):
+    db_path = tmp_path / "numbers.duckdb"
+    extract(
+        db_path,
+        tmp_path / "number-source.txt",
+        lang="es",
+        corpus="source",
+        text="ro ٢ da\n",
+    )
+    extract(
+        db_path,
+        tmp_path / "number-target.txt",
+        lang="pt",
+        corpus="target",
+        text="a dor\n",
+    )
+    policy = SearchPolicy(
+        source_lang="es",
+        target_lang="pt",
+        source_corpus="source",
+        target_corpus="target",
+        filter_source_n=2,
+        filter_target_n=2,
+    )
+
+    repository = DuckDbSemordnilapSearchRepository(db_path)
+    assert [
+        (pair.source_text, pair.target_text)
+        for pair in repository.iter_pairs(policy)
+    ] == [("ro ٢ da", "a dor")]
+    repository.close()
+
+    repository = DuckDbSemordnilapSearchRepository(db_path)
+    assert list(
+        repository.iter_pairs(
+            replace(policy, filter_exclude_numbers=True)
+        )
+    ) == []
     repository.close()
 
 

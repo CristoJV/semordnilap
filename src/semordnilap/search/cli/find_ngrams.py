@@ -154,6 +154,14 @@ def build_argparser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--filter-exclude-numbers",
+        action="store_true",
+        help=(
+            "Discard pairs when either stored surface contains a Unicode "
+            "numeric character; numbers are included by default."
+        ),
+    )
+    parser.add_argument(
         "--filter-exclude-all-stopword-ngrams",
         action="store_true",
         help=(
@@ -218,6 +226,7 @@ def command_from_args(args: argparse.Namespace) -> FindSemordnilapsCommand:
         filter_exclude_palindromes=args.filter_exclude_palindromes,
         filter_exclude_identical_text=args.filter_exclude_identical_text,
         filter_exclude_punctuation=args.filter_exclude_punctuation,
+        filter_exclude_numbers=args.filter_exclude_numbers,
         filter_exclude_all_stopword_ngrams=(
             args.filter_exclude_all_stopword_ngrams
         ),

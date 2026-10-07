@@ -25,6 +25,7 @@ class SearchPolicy:
     filter_exclude_palindromes: bool = False
     filter_exclude_identical_text: bool = False
     filter_exclude_punctuation: bool = False
+    filter_exclude_numbers: bool = False
     filter_exclude_all_stopword_ngrams: bool = False
     source_dataset_id: str | None = None
     target_dataset_id: str | None = None

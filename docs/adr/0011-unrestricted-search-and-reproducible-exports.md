@@ -22,7 +22,8 @@ Search defaults to the complete available result set:
 
 - stored counts from one upward are eligible;
 - all stored n-gram sizes and normalized-key lengths are eligible;
-- punctuation-only policy and all-stopword policy do not remove candidates;
+- punctuation, numeric characters and all-stopword policy do not remove
+  candidates;
 - normalized palindromes and identical text are included;
 - output has no row limit.
 
@@ -55,4 +56,3 @@ summary. Periodic progress is configurable independently of filtering.
 - A failed row iteration cannot replace a previously complete TSV.
 - Completed outputs can be tied to their immutable inputs and verified by
   checksum after aliases move to newer active generations.
-
