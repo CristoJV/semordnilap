@@ -23,6 +23,8 @@
 - [ADR 0011](0011-unrestricted-search-and-reproducible-exports.md):
   unrestricted search defaults, explicit filters, exact dry runs and
   reproducible atomic pair exports.
+- [ADR 0012](0012-four-public-command-entry-points.md): four public commands
+  for corpus acquisition, tagging, n-grams and semordnilap search.
 
 These records describe accepted behavior or mark the decision that superseded
 it. Proposed replacements or migrations belong in

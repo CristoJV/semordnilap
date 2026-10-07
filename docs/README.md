@@ -15,6 +15,8 @@
   almacenamiento único, migración y filtros opt-in.
 - [ADR de búsqueda sin restricciones](adr/0011-unrestricted-search-and-reproducible-exports.md):
   filtros explícitos, dry-run exacto y exportaciones reproducibles.
+- [ADR de los cuatro comandos públicos](adr/0012-four-public-command-entry-points.md):
+  `sp_corpus`, `sp_tag`, `sp_ngrams` y `sp_semord`.
 
 El flujo de n-gramas soportado es `corpus -> n-gramas textuales`, con la
 búsqueda DuckDB como consumidor opcional. `sp_tag` es una utilidad separada:

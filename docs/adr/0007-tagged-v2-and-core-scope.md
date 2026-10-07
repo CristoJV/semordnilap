@@ -29,8 +29,6 @@ n-gram storage.
 
 - Large tagged outputs have smaller failure domains and bounded document size.
 - ES/GL model compatibility has an explicit real-model smoke command.
-- The default install exposes `sp_corpus`, `sp_tag`, `sp_ngrams` and optional
-  `sp_search_ngrams`; the old `sp_corpus_wikisource` entry point remains only
-  as a compatibility alias.
+- The command-surface portion of this decision is superseded by ADR 0012.
 - Historical user data and active partial files are never deleted by source
   cleanup.

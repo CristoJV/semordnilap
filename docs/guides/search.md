@@ -1,6 +1,6 @@
 # Búsqueda de semordnilaps
 
-`sp_search_ngrams` busca pares reversibles en las generaciones finales de
+`sp_semord` busca pares reversibles en las generaciones finales de
 n-gramas almacenadas en DuckDB. La condición esencial es:
 
 ```text
@@ -57,7 +57,7 @@ con `--dry-run`. Este ejemplo busca dentro de CorpusNÓS y aplica filtros
 exploratorios explícitos:
 
 ```bash
-uv run sp_search_ngrams \
+uv run sp_semord \
   --db-path data/ngrams/counts.duckdb \
   --src-lang gl \
   --tgt-lang gl \
@@ -79,7 +79,7 @@ Si el volumen es aceptable, ejecute la misma política quitando `--dry-run` y
 añadiendo `--out`:
 
 ```bash
-uv run sp_search_ngrams \
+uv run sp_semord \
   --db-path data/ngrams/counts.duckdb \
   --out data/search/gl_corpusnos_first.tsv \
   --src-lang gl \
@@ -114,7 +114,7 @@ cobertura se elimina o relaja cada `--filter-*`:
 La forma mínima de medir el universo completo es:
 
 ```bash
-uv run sp_search_ngrams \
+uv run sp_semord \
   --db-path data/ngrams/counts.duckdb \
   --src-lang gl \
   --tgt-lang gl \
@@ -408,7 +408,7 @@ Los lados son independientes. Por ejemplo, español de Wikisource contra
 gallego de CorpusNÓS:
 
 ```bash
-uv run sp_search_ngrams \
+uv run sp_semord \
   --db-path data/ngrams/counts.duckdb \
   --out data/search/es_wikisource_gl_corpusnos.tsv \
   --src-lang es \
@@ -424,23 +424,7 @@ uv run sp_search_ngrams \
 Invertir source y target es otra búsqueda y produce identidades dirigidas
 diferentes.
 
-## 14. Combinación de resultados
-
-Se pueden concatenar TSV compatibles conservando una sola cabecera:
-
-```bash
-uv run sp_concat_pairs \
-  --out data/search/es_gl_all.tsv \
-  data/search/es_wikisource-gl_wikisource.tsv \
-  data/search/es_wikisource-gl_corpusnos.tsv
-```
-
-`sp_concat_pairs` valida las cabeceras y escribe atómicamente, pero no
-deduplica ni agrega frecuencias. `pair_id` permite deduplicar una orientación
-en la misma combinación de corpus; `lexical_pair_id` permite relacionarla
-entre corpus distintos.
-
-## 15. Mejoras pendientes
+## 14. Mejoras pendientes
 
 La búsqueda ya dispone de salida atómica, manifiesto, filtros no destructivos
 de puntuación y stopwords, `dry-run`, progreso, distribución por tamaños y

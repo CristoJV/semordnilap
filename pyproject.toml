@@ -13,11 +13,9 @@ dependencies = [
 
 [project.scripts]
 sp_corpus = "semordnilap.corpus.cli:main"
-sp_corpus_wikisource = "semordnilap.corpus.wikisource:main"
 sp_tag = "semordnilap.tagging.cli:main"
 sp_ngrams = "semordnilap.ngrams.cli.extract:main"
-sp_search_ngrams = "semordnilap.search.cli.find_ngrams:main"
-sp_concat_pairs = "semordnilap.search.cli.concat_pairs:main"
+sp_semord = "semordnilap.search.cli.find_ngrams:main"
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]

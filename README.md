@@ -18,7 +18,7 @@ flowchart LR
 sp_corpus              descarga corpus versionados por subcomando
 sp_tag                 utilidad independiente de tagging contextual
 sp_ngrams              extracción, migración, inspección y exportación
-sp_search_ngrams       consumidor opcional de semordnilaps
+sp_semord              búsqueda de semordnilaps en los n-gramas finales
 ```
 
 Instalación y comprobación:
