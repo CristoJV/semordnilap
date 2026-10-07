@@ -18,18 +18,14 @@ from semordnilap.ngrams.domain import (
 )
 
 logger = logging.getLogger(__name__)
-INSERT_BATCH_SIZE = 50_000
-CURRENT_SCHEMA_VERSION = 3
-RAW_COUNTS_TABLE = "ngram_counts"
-TOTAL_COUNTS_TABLE = "ngram_totals"
+CURRENT_SCHEMA_VERSION = 4
 V2_FINAL_TABLE = "ngram_final_v2"
 FINALIZATION_PARTS_TABLE = "ngram_finalization_parts"
 DEFAULT_FINALIZATION_BUCKETS = 8
-REMOVED_UPOS_TABLES = (
-    "ngram_upos_counts",
-    "ngram_upos_totals",
-    "ngram_upos_stage_v2",
-    "ngram_upos_final_v2",
+REMOVED_LEGACY_TABLES = (
+    "ngram_counts",
+    "ngram_totals",
+    "ngram_compactions",
 )
 
 
@@ -67,22 +63,37 @@ class DuckDbNgramCountRepository:
                 f"the supported version {CURRENT_SCHEMA_VERSION}"
             )
         self._has_generation_schema = self._table_exists("extraction_datasets")
+        if read_only and (
+            self._schema_version < 3 or not self._has_generation_schema
+        ):
+            self._con.close()
+            raise RuntimeError(
+                "This database does not contain a supported generation-based "
+                "n-gram schema"
+            )
         if not read_only:
-            if (
-                existed
-                and self._schema_version < CURRENT_SCHEMA_VERSION
-                and not allow_migrate
-            ):
-                self._con.close()
-                raise RuntimeError(
-                    f"DuckDB schema version {self._schema_version} requires "
-                    "explicit migration: "
-                    f"sp_ngrams db migrate --db-path {db_path}"
-                )
+            if existed and self._schema_version < CURRENT_SCHEMA_VERSION:
+                if self._schema_version != 3 or not self._has_generation_schema:
+                    self._con.close()
+                    raise RuntimeError(
+                        "This database predates the supported generation-based "
+                        "schema v3 and cannot be migrated in place; use a new "
+                        "database and re-extract the corpus"
+                    )
+                if not allow_migrate:
+                    self._con.close()
+                    raise RuntimeError(
+                        "DuckDB schema version 3 requires explicit migration: "
+                        f"sp_ngrams db migrate --db-path {db_path}"
+                    )
             if allow_migrate:
-                self._migrate_to_current()
+                try:
+                    self._migrate_to_current()
+                except Exception:
+                    self._con.close()
+                    raise
             else:
-                self._create_schema_v3()
+                self._create_schema_v4()
             self._has_generation_schema = True
             self._schema_version = CURRENT_SCHEMA_VERSION
 
@@ -118,10 +129,9 @@ class DuckDbNgramCountRepository:
         if self._fault_injector is not None:
             self._fault_injector(point)
 
-    def _create_schema_v3(self) -> None:
+    def _create_schema_v4(self) -> None:
         self._con.execute("BEGIN TRANSACTION")
         try:
-            self._ensure_text_tables()
             self._ensure_generation_tables()
             self._record_schema_version(CURRENT_SCHEMA_VERSION)
             self._con.execute("COMMIT")
@@ -132,11 +142,15 @@ class DuckDbNgramCountRepository:
     def _migrate_to_current(self) -> None:
         if self._schema_version == CURRENT_SCHEMA_VERSION:
             return
+        if self._schema_version != 3 or not self._has_generation_schema:
+            raise RuntimeError(
+                "Only generation-based schema v3 can be migrated to v4; "
+                f"found schema v{self._schema_version}"
+            )
         self._con.execute("BEGIN TRANSACTION")
         try:
-            self._ensure_text_tables()
             self._ensure_generation_tables()
-            for table in REMOVED_UPOS_TABLES:
+            for table in REMOVED_LEGACY_TABLES:
                 self._con.execute(f"DROP TABLE IF EXISTS {table}")
             self._record_schema_version(CURRENT_SCHEMA_VERSION)
             self._con.execute("COMMIT")
@@ -163,60 +177,6 @@ class DuckDbNgramCountRepository:
             """,
             [version, version],
         )
-
-    def _ensure_text_tables(self) -> None:
-        self._con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ngram_counts (
-                lang TEXT NOT NULL,
-                corpus TEXT NOT NULL,
-                text TEXT NOT NULL,
-                n INTEGER NOT NULL,
-                count BIGINT NOT NULL,
-                norm_key TEXT NOT NULL,
-                has_punctuation BOOLEAN NOT NULL DEFAULT false
-            )
-            """
-        )
-        self._con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ngram_totals (
-                lang TEXT NOT NULL,
-                corpus TEXT NOT NULL,
-                text TEXT NOT NULL,
-                n INTEGER NOT NULL,
-                count BIGINT NOT NULL,
-                norm_key TEXT NOT NULL,
-                has_punctuation BOOLEAN NOT NULL DEFAULT false
-            )
-            """
-        )
-        self._con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ngram_compactions (
-                lang TEXT NOT NULL,
-                corpus TEXT NOT NULL,
-                n INTEGER NOT NULL,
-                compacted_at TIMESTAMP NOT NULL
-            )
-            """
-        )
-        # DuckDB rewrites an existing column to its default when ADD COLUMN IF
-        # NOT EXISTS is repeated, so inspect the schema before migrating.
-        for table in (RAW_COUNTS_TABLE, TOTAL_COUNTS_TABLE):
-            columns = {
-                row[1]
-                for row in self._con.execute(
-                    f"PRAGMA table_info('{table}')"
-                ).fetchall()
-            }
-            if "has_punctuation" not in columns:
-                self._con.execute(
-                    f"""
-                    ALTER TABLE {table}
-                    ADD COLUMN has_punctuation BOOLEAN DEFAULT false
-                    """
-                )
 
     def prepare_extraction(
         self,
@@ -336,7 +296,7 @@ class DuckDbNgramCountRepository:
         counts: Counter[NgramKey],
         lang: str,
         corpus: str,
-        fold_nasal_letters: bool,
+        preserve_nasal_letters: bool,
     ) -> bool:
         existing = self._con.execute(
             """
@@ -368,7 +328,7 @@ class DuckDbNgramCountRepository:
                 count=count,
                 lang=lang,
                 corpus=corpus,
-                fold_nasal_letters=fold_nasal_letters,
+                preserve_nasal_letters=preserve_nasal_letters,
             )
             base_rows.append(
                 (
@@ -803,89 +763,6 @@ class DuckDbNgramCountRepository:
             """
         )
 
-    def add_counts(
-        self,
-        counts: Counter[NgramKey],
-        *,
-        lang: str,
-        corpus: str,
-        fold_nasal_letters: bool,
-    ) -> None:
-        if not counts:
-            return
-
-        started_at = perf_counter()
-        total = len(counts)
-        logger.info(
-            "Appending %d unique n-gram counts for lang=%s corpus=%s",
-            total,
-            lang,
-            corpus,
-        )
-
-        batch = []
-        persisted = 0
-        for ngram, count in counts.items():
-            row = build_ngram_count(
-                ngram,
-                count=count,
-                lang=lang,
-                corpus=corpus,
-                fold_nasal_letters=fold_nasal_letters,
-            )
-            batch.append(
-                (
-                    row.lang,
-                    row.corpus,
-                    row.text,
-                    row.n,
-                    row.count,
-                    row.norm_key,
-                    row.has_punctuation,
-                )
-            )
-            if len(batch) >= INSERT_BATCH_SIZE:
-                self._insert_batch(batch)
-                persisted += len(batch)
-                logger.info("Appended %d/%d n-gram counts", persisted, total)
-                batch.clear()
-
-        if batch:
-            self._insert_batch(batch)
-            persisted += len(batch)
-            logger.info("Appended %d/%d n-gram counts", persisted, total)
-
-        self._invalidate_compactions(
-            lang=lang,
-            corpus=corpus,
-            n_values={
-                len(ngram.tokens)
-                if isinstance(ngram, ExtractedNgram)
-                else len(ngram)
-                for ngram in counts
-            },
-        )
-        logger.info(
-            "Appended %d n-gram counts in %.2fs",
-            total,
-            perf_counter() - started_at,
-        )
-
-    def _insert_batch(self, rows: list[tuple]) -> None:
-        self._copy_rows(
-            "ngram_counts",
-            (
-                "lang",
-                "corpus",
-                "text",
-                "n",
-                "count",
-                "norm_key",
-                "has_punctuation",
-            ),
-            rows,
-        )
-
     def _copy_rows(
         self,
         table: str,
@@ -920,43 +797,14 @@ class DuckDbNgramCountRepository:
         finally:
             tmp_path.unlink(missing_ok=True)
 
-    def _invalidate_compactions(
-        self, *, lang: str, corpus: str, n_values: set[int]
-    ) -> None:
-        if not n_values:
-            return
-        placeholders = ", ".join("?" for _ in n_values)
-        params = [lang, corpus, *sorted(n_values)]
-        self._con.execute(
-            f"""
-            DELETE FROM ngram_totals
-            WHERE lang = ? AND corpus = ? AND n IN ({placeholders})
-            """,
-            params,
-        )
-        self._con.execute(
-            f"""
-            DELETE FROM ngram_compactions
-            WHERE lang = ? AND corpus = ? AND n IN ({placeholders})
-            """,
-            params,
-        )
-        logger.info(
-            "Invalidated compacted totals for lang=%s corpus=%s n=%s",
-            lang,
-            corpus,
-            ",".join(str(n) for n in sorted(n_values)),
-        )
-
-    def _resolve_v2_dataset(
+    def _resolve_dataset(
         self, *, lang: str, corpus: str, dataset_id: str | None = None
     ):
         if not self._has_generation_schema:
-            if dataset_id:
-                raise ValueError(
-                    "dataset_id requires a generation-based database schema"
-                )
-            return None
+            raise RuntimeError(
+                "This database does not contain the generation-based n-gram "
+                "schema"
+            )
         if dataset_id:
             row = self._con.execute(
                 """
@@ -987,7 +835,7 @@ class DuckDbNgramCountRepository:
             )
         return rows[0] if rows else None
 
-    def _iter_v2_counts(
+    def _iter_final_counts(
         self,
         *,
         dataset_id: str,
@@ -1043,265 +891,27 @@ class DuckDbNgramCountRepository:
         export_n: int = 0,
         min_norm_len: int = 0,
         max_norm_len: int = 0,
-        source: str = "auto",
         dataset_id: str | None = None,
     ):
-        v2_dataset = self._resolve_v2_dataset(
+        dataset = self._resolve_dataset(
             lang=lang, corpus=corpus, dataset_id=dataset_id
         )
-        if v2_dataset:
-            dataset_id, status, generation = v2_dataset
-            if status != "complete" or generation is None:
-                raise RuntimeError(
-                    f"Extraction dataset is not complete: {dataset_id}"
-                )
-            if source == "raw":
-                raise RuntimeError(
-                    "Raw staging was retired after generation finalization"
-                )
-            yield from self._iter_v2_counts(
-                dataset_id=dataset_id,
-                generation=generation,
-                lang=lang,
-                corpus=corpus,
-                min_count=min_count,
-                max_results=max_results,
-                export_n=export_n,
-                min_norm_len=min_norm_len,
-                max_norm_len=max_norm_len,
-            )
-            return
-
-        table = self._select_counts_table(
+        if dataset is None:
+            raise ValueError(f"No extraction dataset exists for {lang}/{corpus}")
+        dataset_id, status, generation = dataset
+        if status != "complete" or generation is None:
+            raise RuntimeError(f"Extraction dataset is not complete: {dataset_id}")
+        yield from self._iter_final_counts(
+            dataset_id=dataset_id,
+            generation=generation,
             lang=lang,
             corpus=corpus,
+            min_count=min_count,
+            max_results=max_results,
             export_n=export_n,
-            source=source,
-        )
-        logger.info(
-            "Exporting n-grams from %s for lang=%s corpus=%s min_count=%d "
-            "max_results=%d export_n=%d min_norm_len=%d max_norm_len=%d",
-            table,
-            lang,
-            corpus,
-            min_count,
-            max_results,
-            export_n,
-            min_norm_len,
-            max_norm_len,
-        )
-        where_clause, params = self._count_filters(
-            lang=lang,
-            corpus=corpus,
-            n=export_n,
             min_norm_len=min_norm_len,
             max_norm_len=max_norm_len,
         )
-        limit_clause = ""
-        if max_results:
-            limit_clause = f"LIMIT {max_results}"
-
-        if table == TOTAL_COUNTS_TABLE:
-            base_sql = f"""
-                SELECT lang, corpus, text, n, count AS total_count, norm_key,
-                       has_punctuation
-                FROM {TOTAL_COUNTS_TABLE}
-                WHERE {where_clause} AND count >= ?
-                ORDER BY total_count DESC, text ASC
-                {limit_clause}
-            """
-        else:
-            base_sql = f"""
-                SELECT lang, corpus, text, n, SUM(count) AS total_count,
-                       norm_key, has_punctuation
-                FROM {RAW_COUNTS_TABLE}
-                WHERE {where_clause}
-                GROUP BY lang, corpus, text, n, norm_key, has_punctuation
-                HAVING SUM(count) >= ?
-                ORDER BY total_count DESC, text ASC
-                {limit_clause}
-            """
-        result = self._con.execute(base_sql, [*params, min_count])
-        while row := result.fetchone():
-            yield self._row_to_count(row)
-
-    def _count_filters(
-        self,
-        *,
-        lang: str,
-        corpus: str,
-        n: int = 0,
-        min_norm_len: int = 0,
-        max_norm_len: int = 0,
-    ) -> tuple[str, list]:
-        where = ["lang = ?", "corpus = ?"]
-        params = [lang, corpus]
-        if n:
-            where.append("n = ?")
-            params.append(n)
-        if min_norm_len:
-            where.append("length(norm_key) >= ?")
-            params.append(min_norm_len)
-        if max_norm_len:
-            where.append("length(norm_key) <= ?")
-            params.append(max_norm_len)
-        return " AND ".join(where), params
-
-    def _row_to_count(self, row) -> NgramCount:
-        return NgramCount(
-            lang=row[0],
-            corpus=row[1],
-            text=row[2],
-            n=row[3],
-            count=row[4],
-            norm_key=row[5],
-            has_punctuation=row[6],
-        )
-
-    def _select_counts_table(
-        self, *, lang: str, corpus: str, export_n: int, source: str
-    ) -> str:
-        if source not in {"auto", "raw", "compact"}:
-            raise ValueError("source must be one of: auto, raw, compact")
-        if source == "raw":
-            return RAW_COUNTS_TABLE
-        if source == "compact":
-            if not self._has_usable_compaction(
-                lang=lang, corpus=corpus, n=export_n
-            ):
-                raise RuntimeError(
-                    f"No complete compacted counts for {lang}/{corpus}"
-                )
-            return TOTAL_COUNTS_TABLE
-        if self._has_usable_compaction(lang=lang, corpus=corpus, n=export_n):
-            return TOTAL_COUNTS_TABLE
-        return RAW_COUNTS_TABLE
-
-    def _has_usable_compaction(
-        self, *, lang: str, corpus: str, n: int
-    ) -> bool:
-        if n:
-            return self._has_compaction(lang=lang, corpus=corpus, n=n)
-
-        raw_n = set(
-            self._distinct_n_values(
-                table=RAW_COUNTS_TABLE,
-                lang=lang,
-                corpus=corpus,
-            )
-        )
-        compact_n = set(self._compacted_n_values(lang=lang, corpus=corpus))
-        return bool(compact_n) and raw_n.issubset(compact_n)
-
-    def _has_compaction(self, *, lang: str, corpus: str, n: int) -> bool:
-        row = self._con.execute(
-            """
-            SELECT COUNT(*)
-            FROM ngram_compactions
-            WHERE lang = ? AND corpus = ? AND n = ?
-            """,
-            [lang, corpus, n],
-        ).fetchone()
-        return bool(row and row[0])
-
-    def _distinct_n_values(
-        self, *, table: str, lang: str, corpus: str
-    ) -> list[int]:
-        rows = self._con.execute(
-            f"""
-            SELECT DISTINCT n
-            FROM {table}
-            WHERE lang = ? AND corpus = ?
-            ORDER BY n
-            """,
-            [lang, corpus],
-        ).fetchall()
-        return [row[0] for row in rows]
-
-    def _compacted_n_values(self, *, lang: str, corpus: str) -> list[int]:
-        rows = self._con.execute(
-            """
-            SELECT n
-            FROM ngram_compactions
-            WHERE lang = ? AND corpus = ?
-            ORDER BY n
-            """,
-            [lang, corpus],
-        ).fetchall()
-        return [row[0] for row in rows]
-
-    def compact_counts(self, *, lang: str, corpus: str, n: int) -> int:
-        logger.info(
-            "Compacting raw n-gram rows into totals for lang=%s corpus=%s n=%d",
-            lang,
-            corpus,
-            n,
-        )
-        started_at = perf_counter()
-        self._con.execute("BEGIN TRANSACTION")
-        try:
-            self._con.execute(
-                """
-                DELETE FROM ngram_totals
-                WHERE lang = ? AND corpus = ? AND n = ?
-                """,
-                [lang, corpus, n],
-            )
-            self._con.execute(
-                """
-                INSERT INTO ngram_totals(
-                    lang, corpus, text, n, count, norm_key, has_punctuation
-                )
-                SELECT lang, corpus, text, n, SUM(count) AS total_count,
-                       norm_key, has_punctuation
-                FROM ngram_counts
-                WHERE lang = ? AND corpus = ? AND n = ?
-                GROUP BY lang, corpus, text, n, norm_key, has_punctuation
-                """,
-                [lang, corpus, n],
-            )
-            self._con.execute(
-                """
-                DELETE FROM ngram_compactions
-                WHERE lang = ? AND corpus = ? AND n = ?
-                """,
-                [lang, corpus, n],
-            )
-            self._con.execute(
-                """
-                INSERT INTO ngram_compactions(lang, corpus, n, compacted_at)
-                VALUES (?, ?, ?, current_timestamp)
-                """,
-                [lang, corpus, n],
-            )
-            self._con.execute("COMMIT")
-        except Exception:
-            self._con.execute("ROLLBACK")
-            raise
-        compacted = self._con.execute(
-            """
-            SELECT COUNT(*)
-            FROM ngram_totals
-            WHERE lang = ? AND corpus = ? AND n = ?
-            """,
-            [lang, corpus, n],
-        ).fetchone()[0]
-        logger.info(
-            "Compacted %d total n-gram rows in %.2fs",
-            compacted,
-            perf_counter() - started_at,
-        )
-        return compacted
-
-    def count_entries(self, *, lang: str, corpus: str) -> int:
-        return self._con.execute(
-            """
-            SELECT COUNT(*)
-            FROM ngram_counts
-            WHERE lang = ? AND corpus = ?
-            """,
-            [lang, corpus],
-        ).fetchone()[0]
 
     def stats(
         self,
@@ -1310,246 +920,89 @@ class DuckDbNgramCountRepository:
         corpus: str | None = None,
         include_top_rows: bool = False,
     ):
-        where = []
-        params = []
-        if lang:
-            where.append("lang = ?")
-            params.append(lang)
-        if corpus:
-            where.append("corpus = ?")
-            params.append(corpus)
-
-        where_clause = ""
-        if where:
-            where_clause = "WHERE " + " AND ".join(where)
-
-        by_lang_corpus = self._con.execute(
-            f"""
-            SELECT
-                lang,
-                corpus,
-                COUNT(*) AS partial_rows,
-                SUM(count) AS total_occurrences,
-                approx_count_distinct(text) AS approx_unique_texts
-            FROM ngram_counts
-            {where_clause}
-            GROUP BY lang, corpus
-            ORDER BY partial_rows DESC
+        filter_params = [lang, lang, corpus, corpus]
+        datasets = self._con.execute(
+            """
+            SELECT dataset_id, artifact_id, policy_hash, lang, corpus,
+                   input_format, sample, status, active_generation,
+                   created_at, completed_at
+            FROM extraction_datasets
+            WHERE (? IS NULL OR lang = ?) AND (? IS NULL OR corpus = ?)
+            ORDER BY lang, corpus, created_at
             """,
-            params,
+            filter_params,
+        ).fetchall()
+        generation_collections = self._con.execute(
+            """
+            SELECT lang, corpus, COUNT(*) AS datasets,
+                   count_if(status = 'complete') AS complete_datasets,
+                   count_if(status = 'in_progress') AS active_datasets,
+                   MAX(created_at) AS latest_created_at
+            FROM extraction_datasets
+            WHERE (? IS NULL OR lang = ?) AND (? IS NULL OR corpus = ?)
+            GROUP BY lang, corpus
+            ORDER BY lang, corpus
+            """,
+            filter_params,
+        ).fetchall()
+        generation_by_n = self._con.execute(
+            f"""
+            SELECT d.dataset_id, d.lang, d.corpus, f.n,
+                   COUNT(*) AS rows, SUM(f.count) AS occurrences
+            FROM extraction_datasets d
+            JOIN {V2_FINAL_TABLE} f
+              ON f.dataset_id = d.dataset_id
+             AND f.generation = d.active_generation
+            WHERE (? IS NULL OR d.lang = ?) AND (? IS NULL OR d.corpus = ?)
+            GROUP BY d.dataset_id, d.lang, d.corpus, f.n
+            ORDER BY d.lang, d.corpus, d.dataset_id, f.n
+            """,
+            filter_params,
+        ).fetchall()
+        extraction_runs = self._con.execute(
+            """
+            SELECT d.dataset_id, d.lang, d.corpus, r.status,
+                   r.completed_documents, r.generated_occurrences,
+                   r.committed_chunks, r.updated_at
+            FROM extraction_datasets d
+            JOIN extraction_runs r USING (dataset_id)
+            WHERE (? IS NULL OR d.lang = ?) AND (? IS NULL OR d.corpus = ?)
+            ORDER BY d.created_at
+            """,
+            filter_params,
+        ).fetchall()
+        finalization_parts = self._con.execute(
+            f"""
+            SELECT p.dataset_id, p.generation, p.n,
+                   COUNT(*) AS completed_buckets,
+                   MAX(p.bucket_count) AS bucket_count,
+                   MAX(p.completed_at) AS updated_at
+            FROM {FINALIZATION_PARTS_TABLE} p
+            JOIN extraction_datasets d USING (dataset_id)
+            WHERE (? IS NULL OR d.lang = ?) AND (? IS NULL OR d.corpus = ?)
+            GROUP BY p.dataset_id, p.generation, p.n
+            ORDER BY p.dataset_id, p.generation, p.n
+            """,
+            filter_params,
         ).fetchall()
 
-        legacy_collections = self._con.execute(
-            """
-            WITH locations AS (
-                SELECT DISTINCT lang, corpus, 'raw' AS location
-                FROM ngram_counts
-                UNION ALL
-                SELECT DISTINCT lang, corpus, 'compact' AS location
-                FROM ngram_totals
-                UNION ALL
-                SELECT DISTINCT lang, corpus, 'compaction' AS location
-                FROM ngram_compactions
-            ), collection_flags AS (
-                SELECT lang, corpus,
-                       bool_or(location = 'raw') AS has_raw,
-                       bool_or(location = 'compact') AS has_compact
-                FROM locations
-                GROUP BY lang, corpus
-            ), compacted_n AS (
-                SELECT lang, corpus,
-                       list(n ORDER BY n) AS n_values,
-                       MAX(compacted_at) AS last_compacted_at
-                FROM ngram_compactions
-                GROUP BY lang, corpus
-            )
-            SELECT f.lang, f.corpus, f.has_raw, f.has_compact,
-                   COALESCE(c.n_values, []), c.last_compacted_at
-            FROM collection_flags f
-            LEFT JOIN compacted_n c USING (lang, corpus)
-            ORDER BY f.lang, f.corpus
-            """
-        ).fetchall()
-
-        v2_datasets = []
-        v2_table_counts = []
-        generation_collections = []
-        all_v2_datasets = []
-        generation_by_n = []
-        extraction_runs = []
-        finalization_parts = []
-        if self._has_generation_schema:
-            v2_datasets = self._con.execute(
-                """
-                SELECT dataset_id, artifact_id, policy_hash, lang, corpus,
-                       sample, status, active_generation
-                FROM extraction_datasets
-                WHERE (? IS NULL OR lang = ?) AND (? IS NULL OR corpus = ?)
-                ORDER BY created_at
-                """,
-                [lang, lang, corpus, corpus],
-            ).fetchall()
-            v2_table_counts = self._con.execute(
-                """
-                SELECT 'ngram_stage_v2', COUNT(*) FROM ngram_stage_v2
-                UNION ALL
-                SELECT 'ngram_final_v2', COUNT(*) FROM ngram_final_v2
-                UNION ALL
-                SELECT 'extraction_chunks', COUNT(*) FROM extraction_chunks
-                """
-            ).fetchall()
-            generation_collections = self._con.execute(
-                """
-                SELECT lang, corpus, COUNT(*) AS datasets,
-                       count_if(status = 'complete') AS complete_datasets,
-                       count_if(status = 'in_progress') AS active_datasets,
-                       MAX(created_at) AS latest_created_at
-                FROM extraction_datasets
-                GROUP BY lang, corpus
-                ORDER BY lang, corpus
-                """
-            ).fetchall()
-            all_v2_datasets = self._con.execute(
-                """
-                SELECT dataset_id, artifact_id, policy_hash, lang, corpus,
-                       input_format, sample, status, active_generation,
-                       created_at, completed_at
-                FROM extraction_datasets
-                ORDER BY lang, corpus, created_at
-                """
-            ).fetchall()
-            generation_by_n = self._con.execute(
+        top_rows = []
+        if include_top_rows:
+            top_rows = self._con.execute(
                 f"""
-                SELECT d.dataset_id, d.lang, d.corpus, f.n,
-                       COUNT(*) AS rows, SUM(f.count) AS occurrences
+                SELECT d.lang, d.corpus, f.surface_display, f.n, f.count,
+                       f.norm_key, d.dataset_id
                 FROM extraction_datasets d
                 JOIN {V2_FINAL_TABLE} f
                   ON f.dataset_id = d.dataset_id
                  AND f.generation = d.active_generation
                 WHERE (? IS NULL OR d.lang = ?)
                   AND (? IS NULL OR d.corpus = ?)
-                GROUP BY d.dataset_id, d.lang, d.corpus, f.n
-                ORDER BY d.lang, d.corpus, d.dataset_id, f.n
-                """,
-                [lang, lang, corpus, corpus],
-            ).fetchall()
-            extraction_runs = self._con.execute(
-                """
-                SELECT d.dataset_id, d.lang, d.corpus, r.status,
-                       r.completed_documents, r.generated_occurrences,
-                       r.committed_chunks, r.updated_at
-                FROM extraction_datasets d
-                JOIN extraction_runs r USING (dataset_id)
-                WHERE (? IS NULL OR d.lang = ?)
-                  AND (? IS NULL OR d.corpus = ?)
-                ORDER BY d.created_at
-                """,
-                [lang, lang, corpus, corpus],
-            ).fetchall()
-            if self._table_exists(FINALIZATION_PARTS_TABLE):
-                finalization_parts = self._con.execute(
-                    f"""
-                    SELECT p.dataset_id, p.generation, p.n,
-                           COUNT(*) AS completed_buckets,
-                           MAX(p.bucket_count) AS bucket_count,
-                           MAX(p.completed_at) AS updated_at
-                    FROM {FINALIZATION_PARTS_TABLE} p
-                    JOIN extraction_datasets d USING (dataset_id)
-                    WHERE (? IS NULL OR d.lang = ?)
-                      AND (? IS NULL OR d.corpus = ?)
-                    GROUP BY p.dataset_id, p.generation, p.n
-                    ORDER BY p.dataset_id, p.generation, p.n
-                    """,
-                    [lang, lang, corpus, corpus],
-                ).fetchall()
-
-        by_n = self._con.execute(
-            f"""
-            SELECT
-                lang,
-                corpus,
-                n,
-                COUNT(*) AS partial_rows,
-                SUM(count) AS total_occurrences,
-                approx_count_distinct(text) AS approx_unique_texts
-            FROM ngram_counts
-            {where_clause}
-            GROUP BY lang, corpus, n
-            ORDER BY partial_rows DESC
-            """,
-            params,
-        ).fetchall()
-
-        top_partial_rows = []
-        if include_top_rows:
-            top_partial_rows = self._con.execute(
-                f"""
-                SELECT lang, corpus, text, n, count, norm_key
-                FROM ngram_counts
-                {where_clause}
-                ORDER BY count DESC
+                ORDER BY f.count DESC, f.surface_key
                 LIMIT 20
                 """,
-                params,
+                filter_params,
             ).fetchall()
-
-        totals_by_n = self._con.execute(
-            f"""
-            SELECT
-                lang,
-                corpus,
-                n,
-                COUNT(*) AS total_rows,
-                SUM(count) AS total_occurrences
-            FROM ngram_totals
-            {where_clause}
-            GROUP BY lang, corpus, n
-            ORDER BY total_rows DESC
-            """,
-            params,
-        ).fetchall()
-
-        table_counts = self._con.execute(
-            """
-            SELECT 'ngram_counts' AS table_name, COUNT(*) AS rows
-            FROM ngram_counts
-            UNION ALL
-            SELECT 'ngram_totals' AS table_name, COUNT(*) AS rows
-            FROM ngram_totals
-            UNION ALL
-            SELECT 'ngram_compactions' AS table_name, COUNT(*) AS rows
-            FROM ngram_compactions
-            ORDER BY table_name
-            """,
-        ).fetchall()
-
-        filtered_table_counts = self._con.execute(
-            f"""
-            SELECT 'ngram_counts' AS table_name, COUNT(*) AS rows
-            FROM ngram_counts
-            {where_clause}
-            UNION ALL
-            SELECT 'ngram_totals' AS table_name, COUNT(*) AS rows
-            FROM ngram_totals
-            {where_clause}
-            UNION ALL
-            SELECT 'ngram_compactions' AS table_name, COUNT(*) AS rows
-            FROM ngram_compactions
-            {where_clause}
-            ORDER BY table_name
-            """,
-            [*params, *params, *params],
-        ).fetchall()
-
-        compacted = self._con.execute(
-            f"""
-            SELECT lang, corpus, n, compacted_at
-            FROM ngram_compactions
-            {where_clause}
-            ORDER BY compacted_at DESC
-            """,
-            params,
-        ).fetchall()
 
         table_inventory = []
         physical_tables = self._con.execute(
@@ -1570,46 +1023,16 @@ class DuckDbNgramCountRepository:
 
         return {
             "schema_version": self._schema_version,
-            "legacy_collections": legacy_collections,
             "generation_collections": generation_collections,
-            "all_v2_datasets": all_v2_datasets,
+            "datasets": datasets,
             "generation_by_n": generation_by_n,
             "extraction_runs": extraction_runs,
             "finalization_parts": finalization_parts,
             "table_inventory": table_inventory,
-            "by_lang_corpus": by_lang_corpus,
-            "by_n": by_n,
-            "totals_by_n": totals_by_n,
-            "table_counts": table_counts,
-            "filtered_table_counts": filtered_table_counts,
-            "top_partial_rows": top_partial_rows,
-            "compacted": compacted,
-            "v2_datasets": v2_datasets,
-            "v2_table_counts": v2_table_counts,
+            "top_rows": top_rows,
         }
-
-    def _count_table_rows(self, table: str, *, lang: str, corpus: str) -> int:
-        return self._con.execute(
-            f"""
-            SELECT COUNT(*)
-            FROM {table}
-            WHERE lang = ? AND corpus = ?
-            """,
-            [lang, corpus],
-        ).fetchone()[0]
 
     def delete_counts(self, *, lang: str, corpus: str) -> dict[str, int]:
-        deleted = {
-            RAW_COUNTS_TABLE: self._count_table_rows(
-                RAW_COUNTS_TABLE, lang=lang, corpus=corpus
-            ),
-            TOTAL_COUNTS_TABLE: self._count_table_rows(
-                TOTAL_COUNTS_TABLE, lang=lang, corpus=corpus
-            ),
-            "ngram_compactions": self._count_table_rows(
-                "ngram_compactions", lang=lang, corpus=corpus
-            ),
-        }
         dataset_ids = [
             row[0]
             for row in self._con.execute(
@@ -1620,27 +1043,29 @@ class DuckDbNgramCountRepository:
                 [lang, corpus],
             ).fetchall()
         ]
-        deleted["v2_datasets"] = len(dataset_ids)
+        deleted = {"datasets": len(dataset_ids)}
+        for table in (
+            "ngram_stage_v2",
+            V2_FINAL_TABLE,
+            FINALIZATION_PARTS_TABLE,
+            "extraction_chunks",
+            "extraction_runs",
+        ):
+            deleted[table] = sum(
+                self._con.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE dataset_id = ?",
+                    [dataset_id],
+                ).fetchone()[0]
+                for dataset_id in dataset_ids
+            )
         logger.info(
-            "Deleting n-gram rows for lang=%s corpus=%s: raw=%d totals=%d "
-            "compactions=%d",
+            "Deleting %d generation-based n-gram dataset(s) for %s/%s",
+            len(dataset_ids),
             lang,
             corpus,
-            deleted[RAW_COUNTS_TABLE],
-            deleted[TOTAL_COUNTS_TABLE],
-            deleted["ngram_compactions"],
         )
         self._con.execute("BEGIN TRANSACTION")
         try:
-            for table in (
-                RAW_COUNTS_TABLE,
-                TOTAL_COUNTS_TABLE,
-                "ngram_compactions",
-            ):
-                self._con.execute(
-                    f"DELETE FROM {table} WHERE lang = ? AND corpus = ?",
-                    [lang, corpus],
-                )
             for dataset_id in dataset_ids:
                 for table in (
                     "ngram_stage_v2",

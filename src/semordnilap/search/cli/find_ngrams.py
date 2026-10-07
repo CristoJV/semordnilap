@@ -65,15 +65,6 @@ def build_argparser() -> argparse.ArgumentParser:
         help="Only search norm_key values with at most this length.",
     )
     parser.add_argument(
-        "--counts-source",
-        choices=["auto", "raw", "compact"],
-        default="auto",
-        help=(
-            "Search compacted totals when available, raw partial counts, "
-            "or choose automatically."
-        ),
-    )
-    parser.add_argument(
         "--max-results",
         type=int,
         default=0,
@@ -124,7 +115,6 @@ def command_from_args(args: argparse.Namespace) -> FindSemordnilapsCommand:
         target_n=args.tgt_n,
         min_norm_len=args.min_norm_len,
         max_norm_len=args.max_norm_len,
-        counts_source=args.counts_source,
         include_palindromes=args.include_palindromes,
         include_identical_text=args.include_identical_text,
         source_dataset_id=args.src_dataset_id,

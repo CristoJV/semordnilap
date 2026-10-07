@@ -20,7 +20,6 @@ class ExtractNgramsCommand:
     export_n: int
     min_export_norm_len: int
     max_export_norm_len: int
-    export_source: str
     export_log_every: int
     limit_docs: int
     flush_unique_ngrams: int
@@ -28,8 +27,6 @@ class ExtractNgramsCommand:
     export_only: bool
     export_after_count: bool
     delete_only: bool
-    compact_only: bool
-    compact_n: int
     policy: NgramExtractionPolicy
     dataset_id: str | None = None
     source_adapter: str = "raw"

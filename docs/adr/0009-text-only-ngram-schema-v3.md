@@ -1,6 +1,6 @@
 # ADR 0009: Text-only n-gram schema v3
 
-Status: accepted
+Status: superseded by ADR 0010
 
 ## Context
 

@@ -47,8 +47,11 @@ Las decisiones principales son:
 - cada artefacto final tiene manifiesto, checksums e identidad inmutable;
 - reintentar extracción no duplica recuentos y cambiar una política crea otra
   identidad;
-- `ñ` sólo se pliega a `n` cuando se solicita expresamente.
+- la extracción conserva por defecto los n-gramas de stopwords y la
+  puntuación; los descartes son opciones explícitas `--filter-*`;
+- `ñ` se normaliza a `n` por defecto; `--preserve-nasal-letters` conserva la
+  distinción cuando se necesita.
 
 Documentación: [mapa](docs/README.md), [ADRs](docs/adr/README.md),
 [RFC implementado](docs/rfc/0001-core-pipeline-hardening.md) y
-[plan actual](docs/plan/0004-text-only-ngram-schema-v3.md).
+[documento técnico de extracción](docs/technical/ngram-extraction.md).

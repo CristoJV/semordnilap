@@ -360,57 +360,83 @@ def test_modern_search_can_select_one_of_multiple_policy_identities(tmp_path):
     ]
 
 
-def test_legacy_database_requires_explicit_migration_and_stats_open_is_read_only(
-    tmp_path,
-):
-    db_path = tmp_path / "legacy.duckdb"
+def make_v3_database(tmp_path, name="v3.duckdb"):
+    corpus = tmp_path / f"{name}.txt"
+    corpus.write_text("La casa azul\n", encoding="utf-8")
+    db_path = tmp_path / name
+    repository = DuckDbNgramCountRepository(db_path)
+    count_corpus(command_for(corpus), repository)
+    repository.close()
     connection = duckdb.connect(str(db_path))
+    connection.execute("DELETE FROM semordnilap_schema WHERE version = 4")
     connection.execute(
-        """
-        CREATE TABLE ngram_counts (
-            lang TEXT, corpus TEXT, text TEXT, n INTEGER, count BIGINT,
-            norm_key TEXT
-        )
-        """
+        "INSERT INTO semordnilap_schema VALUES (3, current_timestamp)"
     )
-    connection.execute(
-        "INSERT INTO ngram_counts VALUES ('gl', 'legacy', 'a casa', 2, 7, 'acasa')"
-    )
+    connection.execute("CREATE TABLE ngram_counts(value INTEGER)")
+    connection.execute("CREATE TABLE ngram_totals(value INTEGER)")
+    connection.execute("CREATE TABLE ngram_compactions(value INTEGER)")
+    connection.execute("INSERT INTO ngram_counts VALUES (1)")
     connection.close()
+    return db_path
 
-    read_only = DuckDbNgramCountRepository(db_path, read_only=True)
-    assert read_only._table_exists("semordnilap_schema") is False
-    read_only.close()
+
+def test_v3_migration_preserves_generations_and_drops_legacy_tables(tmp_path):
+    db_path = make_v3_database(tmp_path)
     with pytest.raises(RuntimeError, match="explicit migration"):
         DuckDbNgramCountRepository(db_path)
 
     DuckDbNgramCountRepository.migrate(db_path)
     migrated = DuckDbNgramCountRepository(db_path, read_only=True)
-    assert migrated._table_exists("semordnilap_schema") is True
-    assert migrated.schema_version == 3
-    assert migrated._con.execute(
-        "SELECT text, count, has_punctuation FROM ngram_counts"
-    ).fetchall() == [("a casa", 7, False)]
+    assert migrated.schema_version == 4
+    assert list(migrated.iter_counts(lang="es", corpus="test", min_count=1))
     assert all(
         not migrated._table_exists(table)
-        for table in (
-            "ngram_upos_counts",
-            "ngram_upos_totals",
-            "ngram_upos_stage_v2",
-            "ngram_upos_final_v2",
-        )
+        for table in ("ngram_counts", "ngram_totals", "ngram_compactions")
     )
     migrated.close()
 
+
+def test_v3_migration_preserves_and_resumes_interrupted_finalization(tmp_path):
+    corpus = tmp_path / "interrupted.txt"
+    corpus.write_text("La casa azul\nEl camino verde\n", encoding="utf-8")
+    db_path = tmp_path / "interrupted.duckdb"
+    repository = DuckDbNgramCountRepository(db_path)
+    completed_parts = 0
+
+    def fail_third_part(point):
+        nonlocal completed_parts
+        if point == "finalize.after_part_counts":
+            completed_parts += 1
+            if completed_parts == 3:
+                raise RuntimeError("part crash")
+
+    repository._fault_injector = fail_third_part
+    with pytest.raises(RuntimeError, match="part crash"):
+        count_corpus(command_for(corpus), repository)
+    repository.close()
+
+    connection = duckdb.connect(str(db_path))
+    connection.execute("DELETE FROM semordnilap_schema WHERE version = 4")
+    connection.execute(
+        "INSERT INTO semordnilap_schema VALUES (3, current_timestamp)"
+    )
+    connection.execute("CREATE TABLE ngram_counts(value INTEGER)")
+    connection.close()
+
     DuckDbNgramCountRepository.migrate(db_path)
-    migrated_again = DuckDbNgramCountRepository(db_path, read_only=True)
-    assert migrated_again._con.execute(
-        "SELECT text, count, has_punctuation FROM ngram_counts"
-    ).fetchall() == [("a casa", 7, False)]
-    migrated_again.close()
+    migrated = DuckDbNgramCountRepository(db_path)
+    assert migrated.resume_finalization(lang="es", corpus="test") > 0
+    assert migrated._con.execute(
+        "SELECT status FROM extraction_datasets"
+    ).fetchone()[0] == "complete"
+    assert migrated._con.execute(
+        "SELECT COUNT(*) FROM ngram_stage_v2"
+    ).fetchone()[0] == 0
+    assert migrated._table_exists("ngram_counts") is False
+    migrated.close()
 
 
-def test_v2_migration_preserves_textual_generations_and_drops_upos(tmp_path):
+def test_schemas_older_than_v3_are_not_migrated(tmp_path):
     db_path = tmp_path / "v2.duckdb"
     connection = duckdb.connect(str(db_path))
     connection.execute(
@@ -418,69 +444,16 @@ def test_v2_migration_preserves_textual_generations_and_drops_upos(tmp_path):
         CREATE TABLE semordnilap_schema (
             version INTEGER PRIMARY KEY, applied_at TIMESTAMP NOT NULL
         );
-        INSERT INTO semordnilap_schema VALUES (2, current_timestamp);
-        CREATE TABLE ngram_final_v2 (
-            dataset_id TEXT, generation INTEGER, surface_key TEXT,
-            surface_display TEXT, n INTEGER, count BIGINT, norm_key TEXT,
-            has_punctuation BOOLEAN
-        );
-        INSERT INTO ngram_final_v2 VALUES
-            ('dataset', 1, 'casa, azul', 'casa, azul', 2, 11,
-             'casaazul', true);
-        CREATE TABLE ngram_upos_counts (value INTEGER);
-        CREATE TABLE ngram_upos_totals (value INTEGER);
-        CREATE TABLE ngram_upos_stage_v2 (value INTEGER);
-        CREATE TABLE ngram_upos_final_v2 (value INTEGER);
-        INSERT INTO ngram_upos_counts VALUES (1);
+        INSERT INTO semordnilap_schema VALUES (2, current_timestamp)
         """
     )
     connection.close()
-
-    with pytest.raises(RuntimeError, match="explicit migration"):
-        DuckDbNgramCountRepository(db_path)
-
-    DuckDbNgramCountRepository.migrate(db_path)
-    migrated = DuckDbNgramCountRepository(db_path, read_only=True)
-
-    assert migrated.schema_version == 3
-    assert migrated._con.execute(
-        """
-        SELECT dataset_id, surface_display, count, has_punctuation
-        FROM ngram_final_v2
-        """
-    ).fetchall() == [("dataset", "casa, azul", 11, True)]
-    assert all(
-        not migrated._table_exists(table)
-        for table in (
-            "ngram_upos_counts",
-            "ngram_upos_totals",
-            "ngram_upos_stage_v2",
-            "ngram_upos_final_v2",
-        )
-    )
-    migrated.close()
+    with pytest.raises(RuntimeError, match="cannot be migrated in place"):
+        DuckDbNgramCountRepository.migrate(db_path)
 
 
-def test_v2_migration_rolls_back_all_changes_on_failure(tmp_path, monkeypatch):
-    db_path = tmp_path / "v2-failure.duckdb"
-    connection = duckdb.connect(str(db_path))
-    connection.execute(
-        """
-        CREATE TABLE semordnilap_schema (
-            version INTEGER PRIMARY KEY, applied_at TIMESTAMP NOT NULL
-        );
-        INSERT INTO semordnilap_schema VALUES (2, current_timestamp);
-        CREATE TABLE ngram_counts (
-            lang TEXT, corpus TEXT, text TEXT, n INTEGER, count BIGINT,
-            norm_key TEXT
-        );
-        INSERT INTO ngram_counts VALUES
-            ('gl', 'legacy', 'a casa', 2, 5, 'acasa');
-        CREATE TABLE ngram_upos_counts (value INTEGER);
-        INSERT INTO ngram_upos_counts VALUES (1)
-        """
-    )
-    connection.close()
+def test_v3_migration_rolls_back_all_changes_on_failure(tmp_path, monkeypatch):
+    db_path = make_v3_database(tmp_path, "v3-failure.duckdb")
 
     def fail_version_record(_self, _version):
         raise RuntimeError("injected migration failure")
@@ -498,27 +471,18 @@ def test_v2_migration_rolls_back_all_changes_on_failure(tmp_path, monkeypatch):
         connection.execute(
             "SELECT MAX(version) FROM semordnilap_schema"
         ).fetchone()[0]
-        == 2
+        == 3
     )
-    assert connection.execute(
-        "SELECT text, count FROM ngram_counts"
-    ).fetchall() == [("a casa", 5)]
+    assert connection.execute("SELECT * FROM ngram_counts").fetchall() == [(1,)]
     assert (
         connection.execute(
             """
         SELECT COUNT(*) FROM information_schema.tables
-        WHERE table_name = 'ngram_upos_counts'
+        WHERE table_name = 'ngram_counts'
         """
         ).fetchone()[0]
         == 1
     )
-    columns = {
-        row[1]
-        for row in connection.execute(
-            "PRAGMA table_info('ngram_counts')"
-        ).fetchall()
-    }
-    assert "has_punctuation" not in columns
     connection.close()
 
 

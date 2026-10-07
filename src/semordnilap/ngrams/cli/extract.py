@@ -59,13 +59,15 @@ def add_lang_corpus(
     lang_required: bool,
     corpus_default: str | None = "default",
     corpus_required: bool = False,
+    dataset_select: bool = False,
 ) -> None:
     parser.add_argument(
         "--lang",
         required=lang_required,
         help=(
             "Language code stored with the extracted n-grams. Known codes "
-            "get language-specific filters; unknown codes use generic rules."
+            "provide one-letter allowances and stopword vocabularies for the "
+            "optional filters; unknown codes use generic rules."
         ),
     )
     parser.add_argument(
@@ -77,10 +79,14 @@ def add_lang_corpus(
             "--corpus overrides the inferred alias."
         ),
     )
-    parser.add_argument(
-        "--dataset-id",
-        help="Select one immutable extraction identity when an alias is ambiguous.",
-    )
+    if dataset_select:
+        parser.add_argument(
+            "--dataset-id",
+            help=(
+                "Select one immutable extraction identity when an alias is "
+                "ambiguous."
+            ),
+        )
 
 
 def add_policy_options(parser: argparse.ArgumentParser) -> None:
@@ -92,60 +98,51 @@ def add_policy_options(parser: argparse.ArgumentParser) -> None:
         help="Largest lexical window to count (1=unigrams, 2=bigrams, 3=trigrams).",
     )
     parser.add_argument(
-        "--min-token-len",
+        "--filter-min-token-len",
+        dest="filter_min_token_len",
         type=int,
         default=2,
         help="Discard lexical tokens shorter than this many characters.",
     )
     parser.add_argument(
-        "--max-token-len",
+        "--filter-max-token-len",
+        dest="filter_max_token_len",
         type=int,
         default=30,
         help="Discard lexical tokens longer than this many characters.",
     )
     parser.add_argument(
-        "--min-norm-len",
+        "--filter-min-norm-len",
+        dest="filter_min_norm_len",
         type=int,
-        default=3,
+        default=2,
         help="Discard n-grams whose normalized key is shorter than this.",
     )
     parser.add_argument(
-        "--include-all-stopword-ngrams",
+        "--filter-all-stopword-ngrams",
+        dest="filter_all_stopword_ngrams",
         action="store_true",
-        help="Keep n-grams made only of stopwords instead of filtering them.",
-    )
-    parser.add_argument(
-        "--fold-nasal-letters",
-        action="store_true",
-        help="Normalize ñ to n. ç is always normalized to c.",
-    )
-    parser.add_argument(
-        "--punctuation",
-        choices=["keep", "boundary"],
-        default="keep",
         help=(
-            "keep retains punctuation in the stored surface and permits "
-            "lexical windows to cross it; boundary treats every punctuation "
-            "character as a hard n-gram boundary. Punctuation never counts "
-            "toward n or norm_key."
+            "Discard n-grams made exclusively of stopwords. By default they "
+            "are retained like every other valid n-gram."
         ),
     )
-    # Accept historical spellings without advertising three ways to express
-    # the same policy in the public CLI.
     parser.add_argument(
-        "--omit-punctuation",
-        dest="punctuation",
-        action="store_const",
-        const="boundary",
-        help=argparse.SUPPRESS,
+        "--preserve-nasal-letters",
+        action="store_true",
+        help=(
+            "Preserve ñ in norm_key instead of applying the default ñ→n "
+            "normalization. ç is always normalized to c."
+        ),
     )
     parser.add_argument(
-        "--keep-punctuation",
-        "--no-omit-punctuation",
-        dest="punctuation",
-        action="store_const",
-        const="keep",
-        help=argparse.SUPPRESS,
+        "--filter-punctuation-boundaries",
+        action="store_true",
+        help=(
+            "Treat punctuation as a hard n-gram boundary. By default "
+            "punctuation is retained in the surface form and lexical windows "
+            "may cross it; punctuation never counts toward n or norm_key."
+        ),
     )
 
 
@@ -183,14 +180,6 @@ def add_counting_options(parser: argparse.ArgumentParser) -> None:
         default=0,
         help="Process only the first N documents; 0 processes the full corpus.",
     )
-    # Removed from the visible interface because extraction checkpoints each
-    # document and this historical option never controlled that behavior.
-    parser.add_argument(
-        "--chunk-docs",
-        type=int,
-        default=1000,
-        help=argparse.SUPPRESS,
-    )
     parser.add_argument(
         "--flush-unique-ngrams",
         type=int,
@@ -207,11 +196,6 @@ def add_counting_options(parser: argparse.ArgumentParser) -> None:
             "Delete and rebuild only the matching immutable dataset identity. "
             "Without this flag, reruns resume committed checkpoints."
         ),
-    )
-    parser.add_argument(
-        "--no-compact-after-count",
-        action="store_true",
-        help=argparse.SUPPRESS,
     )
 
 
@@ -242,15 +226,6 @@ def add_export_options(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=0,
         help="Only export rows whose norm_key has at most this length.",
-    )
-    parser.add_argument(
-        "--export-source",
-        choices=["auto", "raw", "compact"],
-        default="auto",
-        help=(
-            "Where exported counts come from. auto uses compacted totals "
-            "when available, otherwise raw partial rows."
-        ),
     )
     parser.add_argument(
         "--export-log-every",
@@ -288,12 +263,12 @@ def build_argparser() -> argparse.ArgumentParser:
         formatter_class=HELP_FORMATTER,
     )
     add_db_path(export_parser)
-    add_lang_corpus(export_parser, lang_required=True)
+    add_lang_corpus(export_parser, lang_required=True, dataset_select=True)
     export_parser.add_argument("--max-n", type=int, default=3)
     export_parser.add_argument(
-        "--fold-nasal-letters",
+        "--preserve-nasal-letters",
         action="store_true",
-        help="Normalize ñ to n when scoring exported n-grams.",
+        help="Preserve ñ instead of applying the default ñ→n scoring normalization.",
     )
     add_export_options(export_parser)
 
@@ -328,28 +303,6 @@ def build_argparser() -> argparse.ArgumentParser:
     add_db_path(delete_parser)
     add_lang_corpus(delete_parser, lang_required=True)
 
-    compact_parser = db_subparsers.add_parser(
-        "compact",
-        help="Build totals for legacy raw-count tables only.",
-        description=(
-            "Compact legacy ngram_counts rows. Modern extraction generations "
-            "are finalized automatically by extract or db finalize."
-        ),
-        formatter_class=HELP_FORMATTER,
-    )
-    add_db_path(compact_parser)
-    add_lang_corpus(compact_parser, lang_required=True)
-    compact_parser.add_argument("--max-n", type=int, default=3)
-    compact_parser.add_argument(
-        "--compact-n",
-        type=int,
-        choices=[1, 2, 3],
-        default=0,
-        help=(
-            "N-gram size to compact. If omitted, compacts n=1..max-n "
-            "progressively."
-        ),
-    )
     finalize_parser = db_subparsers.add_parser(
         "finalize",
         help="Resume consolidation of an already-counted generation.",
@@ -366,12 +319,13 @@ def build_argparser() -> argparse.ArgumentParser:
         lang_required=True,
         corpus_default=None,
         corpus_required=True,
+        dataset_select=True,
     )
     migrate_parser = db_subparsers.add_parser(
         "migrate",
         help=(
-            "Migrate DuckDB to text-only schema v3, preserving textual "
-            "counts and dropping UPOS tables."
+            "Migrate generation-based schema v3 to v4, preserving modern "
+            "datasets and deleting obsolete legacy count tables."
         ),
         formatter_class=HELP_FORMATTER,
     )
@@ -396,8 +350,6 @@ def validate_max_n(args: argparse.Namespace) -> None:
         raise ValueError("--max-n must be at least 1")
     if args.max_n > 3:
         raise ValueError("--max-n cannot be greater than 3")
-    if getattr(args, "compact_n", 0) and args.compact_n > args.max_n:
-        raise ValueError("--compact-n cannot be greater than --max-n")
 
 
 def validate_counting_args(args: argparse.Namespace) -> None:
@@ -407,12 +359,15 @@ def validate_counting_args(args: argparse.Namespace) -> None:
         raise ValueError("--flush-unique-ngrams must be at least 1")
     if not args.corpus or not args.corpus.strip():
         raise ValueError("--corpus cannot be empty")
-    if args.min_token_len < 1:
-        raise ValueError("--min-token-len must be at least 1")
-    if args.max_token_len < args.min_token_len:
-        raise ValueError("--max-token-len cannot be less than --min-token-len")
-    if args.min_norm_len < 0:
-        raise ValueError("--min-norm-len must be 0 or greater")
+    if args.filter_min_token_len < 1:
+        raise ValueError("--filter-min-token-len must be at least 1")
+    if args.filter_max_token_len < args.filter_min_token_len:
+        raise ValueError(
+            "--filter-max-token-len cannot be less than "
+            "--filter-min-token-len"
+        )
+    if args.filter_min_norm_len < 1:
+        raise ValueError("--filter-min-norm-len must be at least 1")
 
 
 def validate_export_args(args: argparse.Namespace) -> None:
@@ -441,14 +396,16 @@ def policy_from_args(args: argparse.Namespace) -> NgramExtractionPolicy:
     return NgramExtractionPolicy(
         lang=args.lang,
         max_n=getattr(args, "max_n", 3),
-        min_token_len=getattr(args, "min_token_len", 2),
-        max_token_len=getattr(args, "max_token_len", 30),
-        min_norm_len=getattr(args, "min_norm_len", 3),
-        include_all_stopword_ngrams=getattr(
-            args, "include_all_stopword_ngrams", False
+        filter_min_token_len=getattr(args, "filter_min_token_len", 2),
+        filter_max_token_len=getattr(args, "filter_max_token_len", 30),
+        filter_min_norm_len=getattr(args, "filter_min_norm_len", 2),
+        filter_all_stopword_ngrams=getattr(
+            args, "filter_all_stopword_ngrams", False
         ),
-        fold_nasal_letters=getattr(args, "fold_nasal_letters", False),
-        omit_punctuation=getattr(args, "punctuation", "keep") == "boundary",
+        preserve_nasal_letters=getattr(args, "preserve_nasal_letters", False),
+        filter_punctuation_boundaries=getattr(
+            args, "filter_punctuation_boundaries", False
+        ),
     )
 
 
@@ -485,7 +442,6 @@ def command_from_args(args: argparse.Namespace) -> ExtractNgramsCommand:
 
     is_export = args.command == "export"
     is_delete = args.command == "db" and args.db_command == "delete"
-    is_compact = args.command == "db" and args.db_command == "compact"
 
     return ExtractNgramsCommand(
         input_path=getattr(args, "input", None),
@@ -498,7 +454,6 @@ def command_from_args(args: argparse.Namespace) -> ExtractNgramsCommand:
         export_n=getattr(args, "export_n", 0),
         min_export_norm_len=getattr(args, "min_export_norm_len", 0),
         max_export_norm_len=getattr(args, "max_export_norm_len", 0),
-        export_source=getattr(args, "export_source", "auto"),
         export_log_every=getattr(args, "export_log_every", 10_000),
         limit_docs=getattr(args, "limit_docs", 0),
         flush_unique_ngrams=getattr(args, "flush_unique_ngrams", 250_000),
@@ -506,8 +461,6 @@ def command_from_args(args: argparse.Namespace) -> ExtractNgramsCommand:
         export_only=is_export,
         export_after_count=is_export,
         delete_only=is_delete,
-        compact_only=is_compact,
-        compact_n=getattr(args, "compact_n", 0),
         policy=policy_from_args(args),
         dataset_id=getattr(args, "dataset_id", None),
         source_adapter=getattr(args, "source_adapter", "raw"),
@@ -541,15 +494,12 @@ def log_stats(repository: DuckDbNgramCountRepository, args) -> None:
 
     table_roles = {
         "semordnilap_schema": "schema history",
-        "ngram_counts": "legacy raw partial counts",
-        "ngram_totals": "legacy compacted counts",
-        "ngram_compactions": "legacy compaction registry",
-        "extraction_datasets": "generation dataset registry",
-        "extraction_runs": "generation run checkpoints",
+        "extraction_datasets": "dataset and active-generation registry",
+        "extraction_runs": "document checkpoints",
         "extraction_chunks": "committed chunk ledger",
         "ngram_finalization_parts": "resumable finalization checkpoints",
-        "ngram_stage_v2": "generation staging counts",
-        "ngram_final_v2": "active/final generation counts",
+        "ngram_stage_v2": "staging counts",
+        "ngram_final_v2": "final generation counts",
     }
     lines.append("database tables:")
     for table, columns, rows in stats["table_inventory"]:
@@ -559,116 +509,19 @@ def log_stats(repository: DuckDbNgramCountRepository, args) -> None:
             f"role={role}"
         )
 
-    legacy_catalog = {
-        (row[0], row[1]): row[2:] for row in stats["legacy_collections"]
-    }
-    generation_catalog = {
-        (row[0], row[1]): row[2:] for row in stats["generation_collections"]
-    }
-    available_keys = sorted(legacy_catalog.keys() | generation_catalog.keys())
-    if available_keys:
+    if stats["generation_collections"]:
         lines.append("available collections (lang/corpus):")
-        for lang, corpus in available_keys:
-            details = []
-            legacy = legacy_catalog.get((lang, corpus))
-            if legacy:
-                has_raw, has_compact, n_values, last_compacted = legacy
-                locations = []
-                if has_raw:
-                    locations.append("raw")
-                if has_compact:
-                    locations.append("compact")
-                n_text = ",".join(str(n) for n in n_values) or "none"
-                details.append(
-                    f"legacy={'+'.join(locations) or 'registry-only'} "
-                    f"compacted_n={n_text} "
-                    f"last_compacted={last_compacted or 'never'}"
-                )
-            generation = generation_catalog.get((lang, corpus))
-            if generation:
-                datasets, complete, active, latest = generation
-                details.append(
-                    f"generations={datasets} complete={complete} "
-                    f"in_progress={active} latest={latest}"
-                )
-            lines.append(f"- {lang}/{corpus}: {'; '.join(details)}")
-
-    raw_by_collection = {
-        (row[0], row[1]): row[2:] for row in stats["by_lang_corpus"]
-    }
-    compact_by_collection = {}
-    totals_by_n = {}
-    for lang, corpus, n, rows, occurrences in stats["totals_by_n"]:
-        totals_by_n[(lang, corpus, n)] = (rows, occurrences)
-        summary = compact_by_collection.setdefault((lang, corpus), [0, 0])
-        summary[0] += rows or 0
-        summary[1] += occurrences or 0
-    compacted_at = {
-        (row[0], row[1], row[2]): row[3] for row in stats["compacted"]
-    }
-    matching_keys = sorted(
-        raw_by_collection.keys()
-        | compact_by_collection.keys()
-        | {(row[0], row[1]) for row in stats["compacted"]}
-        | {(row[1], row[2]) for row in stats["generation_by_n"]}
-        | {(row[3], row[4]) for row in stats["v2_datasets"]}
-    )
-    if matching_keys:
-        lines.append("matching selection:")
-        for lang, corpus in matching_keys:
-            values = []
-            raw = raw_by_collection.get((lang, corpus))
-            if raw:
-                raw_rows, raw_occurrences, unique_texts = raw
-                values.append(
-                    f"raw_rows={format_number(raw_rows)} "
-                    f"raw_occurrences={format_number(raw_occurrences)} "
-                    f"approx_unique_raw_texts={format_number(unique_texts)}"
-                )
-            compact = compact_by_collection.get((lang, corpus))
-            if compact:
-                values.append(
-                    f"compact_rows={format_number(compact[0])} "
-                    f"compact_occurrences={format_number(compact[1])}"
-                )
-            generation_rows = sum(
-                row[4]
-                for row in stats["generation_by_n"]
-                if (row[1], row[2]) == (lang, corpus)
+        for lang, corpus, datasets, complete, active, latest in stats[
+            "generation_collections"
+        ]:
+            lines.append(
+                f"- {lang}/{corpus}: datasets={datasets} complete={complete} "
+                f"in_progress={active} latest={latest}"
             )
-            generation_occurrences = sum(
-                row[5]
-                for row in stats["generation_by_n"]
-                if (row[1], row[2]) == (lang, corpus)
-            )
-            if generation_rows:
-                values.append(
-                    f"generation_rows={format_number(generation_rows)} "
-                    "generation_occurrences="
-                    f"{format_number(generation_occurrences)}"
-                )
-            if not values:
-                has_generation_metadata = any(
-                    (row[3], row[4]) == (lang, corpus)
-                    for row in stats["v2_datasets"]
-                )
-                if has_generation_metadata:
-                    values.append(
-                        "generation metadata present; no active final count "
-                        "rows"
-                    )
-                else:
-                    values.append("compaction registry present; no count rows")
-            lines.append(f"- {lang}/{corpus}: {'; '.join(values)}")
     else:
         lines.append("matching selection: no data matched all filters")
-        if filters and available_keys:
-            lines.append(
-                "hint: choose one of the exact lang/corpus aliases listed "
-                "under available collections"
-            )
 
-    if stats["v2_datasets"]:
+    if stats["datasets"]:
         lines.append("matching immutable datasets:")
         for (
             dataset_id,
@@ -676,15 +529,19 @@ def log_stats(repository: DuckDbNgramCountRepository, args) -> None:
             policy_hash,
             lang,
             corpus,
+            input_format,
             sample,
             status,
             generation,
-        ) in stats["v2_datasets"]:
+            created_at,
+            completed_at,
+        ) in stats["datasets"]:
             lines.append(
                 f"- {lang}/{corpus}: dataset_id={dataset_id} "
                 f"artifact_id={artifact_id} policy_hash={policy_hash} "
-                f"sample={sample} status={status} "
-                f"generation={generation}"
+                f"format={input_format} sample={sample} status={status} "
+                f"generation={generation} created_at={created_at} "
+                f"completed_at={completed_at}"
             )
     if stats["extraction_runs"]:
         lines.append("matching extraction checkpoints:")
@@ -713,30 +570,8 @@ def log_stats(repository: DuckDbNgramCountRepository, args) -> None:
                 f"- dataset_id={dataset_id} generation={generation} n={n}: "
                 f"parts={completed}/{total} updated_at={updated_at}"
             )
-    raw_by_n = {(row[0], row[1], row[2]): row[3:] for row in stats["by_n"]}
-    n_keys = sorted(raw_by_n.keys() | totals_by_n.keys() | compacted_at.keys())
-    if n_keys:
-        lines.append("matching legacy counts by n:")
-        for lang, corpus, n in n_keys:
-            raw_rows, raw_occurrences, unique_texts = raw_by_n.get(
-                (lang, corpus, n), (0, 0, 0)
-            )
-            total_rows, total_occurrences = totals_by_n.get(
-                (lang, corpus, n), (0, 0)
-            )
-            compacted = compacted_at.get((lang, corpus, n), "missing")
-            lines.append(
-                f"- {lang}/{corpus} n={n}: "
-                f"raw_rows={format_number(raw_rows)} "
-                f"raw_occurrences={format_number(raw_occurrences)} "
-                f"approx_unique_raw_texts={format_number(unique_texts)} "
-                f"compact_rows={format_number(total_rows)} "
-                f"compact_occurrences={format_number(total_occurrences)} "
-                f"compacted_at={compacted}"
-            )
-
     if stats["generation_by_n"]:
-        lines.append("matching generation counts by n:")
+        lines.append("matching final counts by n:")
         for dataset_id, lang, corpus, n, rows, occurrences in stats[
             "generation_by_n"
         ]:
@@ -746,50 +581,14 @@ def log_stats(repository: DuckDbNgramCountRepository, args) -> None:
                 f"occurrences={format_number(occurrences)}"
             )
 
-    if stats["filtered_table_counts"]:
-        filtered_table_counts = ", ".join(
-            f"{name}={format_number(rows)}"
-            for name, rows in stats["filtered_table_counts"]
-        )
-        if filters:
-            lines.append(
-                f"matching legacy table rows: {filtered_table_counts}"
-            )
-        else:
-            lines.append(f"legacy table rows: {filtered_table_counts}")
-
-    if args.verbose and stats["top_partial_rows"]:
-        lines.append("top raw partial rows:")
-        for lang, corpus, text, n, count, norm_key in stats[
-            "top_partial_rows"
+    if args.verbose and stats["top_rows"]:
+        lines.append("top final rows:")
+        for lang, corpus, text, n, count, norm_key, dataset_id in stats[
+            "top_rows"
         ]:
             lines.append(
                 f"- {lang}/{corpus} n={n} count={format_number(count)} "
-                f"text={text!r} norm_key={norm_key}"
-            )
-
-    if args.verbose and stats["all_v2_datasets"]:
-        lines.append("all generation dataset identities:")
-        for row in stats["all_v2_datasets"]:
-            (
-                dataset_id,
-                artifact_id,
-                policy_hash,
-                lang,
-                corpus,
-                input_format,
-                sample,
-                status,
-                generation,
-                created_at,
-                completed_at,
-            ) = row
-            lines.append(
-                f"- {lang}/{corpus}: dataset_id={dataset_id} "
-                f"artifact_id={artifact_id} policy_hash={policy_hash} "
-                f"format={input_format} sample={sample} status={status} "
-                f"generation={generation} created_at={created_at} "
-                f"completed_at={completed_at}"
+                f"dataset_id={dataset_id} text={text!r} norm_key={norm_key}"
             )
 
     logger.info("\n%s", "\n".join(lines))
@@ -853,12 +652,13 @@ def main(argv: list[str] | None = None) -> int:
     logger.info(
         "Options: lang=%s corpus=%s max_n=%d min_count=%d "
         "max_results=%d export_n=%d export_norm_len=%d..%d "
-        "export_source=%s export_log_every=%d "
+        "export_log_every=%d "
         "flush_unique_ngrams=%d "
         "adapter=%s "
-        "punctuation=%s "
-        "reset=%s export_only=%s export_after_count=%s delete_only=%s "
-        "compact_only=%s compact_n=%d",
+        "filter_min_token_len=%d filter_max_token_len=%d "
+        "filter_min_norm_len=%d filter_all_stopword_ngrams=%s "
+        "filter_punctuation_boundaries=%s preserve_nasal_letters=%s "
+        "reset=%s export_only=%s export_after_count=%s delete_only=%s",
         command.policy.lang,
         command.corpus,
         command.policy.max_n,
@@ -867,17 +667,19 @@ def main(argv: list[str] | None = None) -> int:
         command.export_n,
         command.min_export_norm_len,
         command.max_export_norm_len,
-        command.export_source,
         command.export_log_every,
         command.flush_unique_ngrams,
         command.source_adapter,
-        "boundary" if command.policy.omit_punctuation else "keep",
+        command.policy.filter_min_token_len,
+        command.policy.filter_max_token_len,
+        command.policy.filter_min_norm_len,
+        command.policy.filter_all_stopword_ngrams,
+        command.policy.filter_punctuation_boundaries,
+        command.policy.preserve_nasal_letters,
         command.reset,
         command.export_only,
         command.export_after_count,
         command.delete_only,
-        command.compact_only,
-        command.compact_n,
     )
 
     if command.export_only:
@@ -894,23 +696,6 @@ def main(argv: list[str] | None = None) -> int:
             command.policy.lang,
             command.corpus,
         )
-    elif command.compact_only:
-        if command.compact_n:
-            logger.info(
-                "Compacted %d n-grams for lang=%s corpus=%s n=%d",
-                affected,
-                command.policy.lang,
-                command.corpus,
-                command.compact_n,
-            )
-        else:
-            logger.info(
-                "Compacted %d n-grams for lang=%s corpus=%s n=1..%d",
-                affected,
-                command.policy.lang,
-                command.corpus,
-                command.policy.max_n,
-            )
     elif args.command == "extract":
         logger.info(
             "Finished n-gram extraction for lang=%s corpus=%s "

@@ -38,7 +38,7 @@ def iter_ngrams_from_text(
         tuple[tuple[str, ...], tuple[str, ...] | tuple[str, str]]
     ]
 
-    if policy.omit_punctuation:
+    if policy.filter_punctuation_boundaries:
         windows = (
             (window, (" ".join(window), " ".join(window)))
             for sentence in iter_sentence_chunks(text)
@@ -58,11 +58,11 @@ def iter_ngrams_from_text(
         if is_valid_ngram(
             lexical_tokens,
             lang=policy.lang,
-            min_token_len=policy.min_token_len,
-            max_token_len=policy.max_token_len,
-            min_norm_len=policy.min_norm_len,
-            include_all_stopword_ngrams=(policy.include_all_stopword_ngrams),
-            fold_nasal_letters=policy.fold_nasal_letters,
+            min_token_len=policy.filter_min_token_len,
+            max_token_len=policy.filter_max_token_len,
+            min_norm_len=policy.filter_min_norm_len,
+            filter_all_stopword_ngrams=policy.filter_all_stopword_ngrams,
+            preserve_nasal_letters=policy.preserve_nasal_letters,
         ):
             key: NgramKey
             surface_key, surface_display = surface
@@ -80,7 +80,7 @@ def build_ngram_count(
     count: int,
     lang: str,
     corpus: str,
-    fold_nasal_letters: bool,
+    preserve_nasal_letters: bool = False,
 ) -> NgramCount:
     if isinstance(tokens, ExtractedNgram):
         lexical_tokens = tokens.tokens
@@ -94,6 +94,8 @@ def build_ngram_count(
         text=text,
         n=len(lexical_tokens),
         count=count,
-        norm_key=normalize_ngram(text, fold_nasal_letters=fold_nasal_letters),
+        norm_key=normalize_ngram(
+            text, preserve_nasal_letters=preserve_nasal_letters
+        ),
         has_punctuation=has_punctuation(text),
     )

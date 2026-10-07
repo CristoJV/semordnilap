@@ -58,12 +58,12 @@ def clean_corpus_text(text: str) -> str:
 
 
 def normalize_compact_text(
-    text: str, *, fold_nasal_letters: bool = False
+    text: str, *, preserve_nasal_letters: bool = False
 ) -> str:
     """Build a compact key: lowercase, de-accented, no whitespace."""
     normalized = strip_accents(text.casefold())
     normalized = normalized.replace("ç", "c")
-    if fold_nasal_letters:
+    if not preserve_nasal_letters:
         normalized = normalized.replace("ñ", "n")
     return "".join(c for c in normalized if not c.isspace())
 

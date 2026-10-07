@@ -165,7 +165,7 @@ def test_corpusnos_collection_extracts_only_manifest_artifacts(tmp_path):
     count_corpus(command, repository)
     rows = list(
         repository.iter_counts(
-            lang="gl", corpus="corpusnos", min_count=1, source="compact"
+            lang="gl", corpus="corpusnos", min_count=1
         )
     )
     policy = repository._con.execute(

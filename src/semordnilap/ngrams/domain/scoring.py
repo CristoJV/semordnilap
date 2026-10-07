@@ -13,7 +13,7 @@ def score_ngram(
     *,
     count: int,
     lang: str,
-    fold_nasal_letters: bool,
+    preserve_nasal_letters: bool,
 ) -> float:
     score = math.log(count + 1)
 
@@ -28,7 +28,7 @@ def score_ngram(
 
     norm_len = len(
         normalize_ngram(
-            " ".join(tokens), fold_nasal_letters=fold_nasal_letters
+            " ".join(tokens), preserve_nasal_letters=preserve_nasal_letters
         )
     )
     if 4 <= norm_len <= 12:

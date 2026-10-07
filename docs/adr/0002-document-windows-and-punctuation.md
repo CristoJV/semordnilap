@@ -6,8 +6,9 @@ Status: accepted
 
 The document is the only hard extraction boundary. Lexical windows cross
 punctuation and sentence boundaries by default while retaining intervening
-punctuation. `--omit-punctuation` exists only as an explicit compatibility
-mode.
+punctuation. `--filter-punctuation-boundaries` explicitly changes punctuation
+into hard boundaries. The former compatibility aliases were removed by ADR
+0010.
 
 The raw-text adapter uses the span from the first lexical token start through
 the last lexical token end. Trailing punctuation does not belong to a unigram.

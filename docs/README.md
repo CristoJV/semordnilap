@@ -4,12 +4,14 @@
   directa, resume y exportación.
 - [Operación de n-gramas](guides/ngrams.md): identidades, DuckDB, migración y
   mantenimiento.
+- [Extracción moderna de n-gramas](technical/ngram-extraction.md): recorrido
+  exacto del dato, tokenización, tablas, transacciones y finalización.
 - [Búsqueda opcional](guides/search.md): consumo de generaciones finales.
 - [Arquitectura técnica](technical/README.md): componentes y contratos.
 - [ADRs](adr/README.md): decisiones aceptadas.
 - [RFC 0001](rfc/0001-core-pipeline-hardening.md): auditoría y resultado.
-- [Plan del esquema textual v3](plan/0004-text-only-ngram-schema-v3.md):
-  migración, fases y pruebas.
+- [ADR del esquema generacional v4](adr/0010-generation-only-schema-v4-and-opt-in-filters.md):
+  almacenamiento único, migración y filtros opt-in.
 
 El flujo de n-gramas soportado es `corpus -> n-gramas textuales`, con la
 búsqueda DuckDB como consumidor opcional. `sp_tag` es una utilidad separada:

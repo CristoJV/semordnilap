@@ -4,6 +4,9 @@ Estado implementado a 2026-10-06.
 
 ## Flujo de n-gramas
 
+La referencia detallada, con el recorrido fila a fila y todas las tablas, está
+en [Extracción moderna de n-gramas](ngram-extraction.md).
+
 ```mermaid
 flowchart LR
     HF[HF revision] --> CA[corpus acquisition]
@@ -11,7 +14,7 @@ flowchart LR
     CS --> RA[manifest-aware adapter]
     RA --> EX[raw Unicode windows]
     EX --> TX[transactional chunks]
-    TX --> FG[(active DuckDB generation v3)]
+    TX --> FG[(active DuckDB generation v4)]
     FG --> SE[optional read-only search]
 
     CS -. independent utility .-> ST[sp_tag / Stanza]
@@ -27,7 +30,7 @@ dominio, no lee `ud-jsonl` y no persiste UPOS.
 | N-gram domain | `ngrams/domain/*` | tokenización Unicode, ventanas, filtros y normalización |
 | N-gram application | `ngrams/application/*` | identidad, chunks, resume y exportación |
 | Source adapters | `ngrams/infrastructure/corpus_adapters.py` | resolución segura de colecciones, idioma y shards |
-| Storage | `ngrams/infrastructure/repositories.py` | esquema v3, migraciones y generaciones DuckDB |
+| Storage | `ngrams/infrastructure/repositories.py` | esquema v4, migración y generaciones DuckDB |
 | Search | `search/*` | consumidor opcional sólo lectura |
 | Tagging | `tagging/*` | utilidad UD independiente, sin integración con n-gramas |
 | Shared | `utils/artifacts.py`, `utils/io.py`, `utils/text.py` | checksums, locks, manifests e I/O |
@@ -65,24 +68,25 @@ intermedia.
 No existe una propiedad `crosses_sentence`: sin tagging no hay un límite de
 frase anotado fiable, y la superficie ya permite observar la puntuación.
 
-## DuckDB schema v3
+## DuckDB schema v4
 
 ```mermaid
 erDiagram
     extraction_datasets ||--o{ extraction_runs : owns
     extraction_datasets ||--o{ extraction_chunks : commits
     extraction_chunks ||--o{ ngram_stage_v2 : stages
+    extraction_datasets ||--o{ ngram_finalization_parts : checkpoints
     extraction_datasets ||--o{ ngram_final_v2 : activates
 ```
 
 Los sufijos `_v2` de las tablas de generación se mantienen para preservar los
-datos existentes; la versión del esquema global es 3. Cada chunk confirma en
+datos modernos existentes; la versión del esquema global es 4. Cada chunk confirma en
 una transacción sus recuentos textuales, ledger y cursor. La finalización agrega
-una generación, la activa y retira staging en otra transacción.
+por `n` y bucket, confirma cada parte por separado, activa la generación en una
+transacción corta y después retira el staging.
 
-Las tablas legacy `ngram_counts`, `ngram_totals` y `ngram_compactions` siguen
-disponibles. Tanto ellas como las tablas de generación almacenan
-`has_punctuation` en las filas textuales.
+No existe una segunda ruta de recuentos ni una operación de compactación. Los
+lectores consumen únicamente la generación activa de `ngram_final_v2`.
 
 ## Migración
 
@@ -93,11 +97,11 @@ permitida es explícita:
 uv run sp_ngrams db migrate --db-path DB
 ```
 
-La migración se ejecuta en una transacción. Para v0/v1 crea las estructuras
-que falten y añade `has_punctuation=false`. Para v2 preserva tablas y filas
-textuales y elimina las cuatro relaciones UPOS legacy/staging/final. Registrar
-v3 por segunda vez no duplica ni altera datos. Una versión superior a 3 se
-rechaza incluso en modo de lectura para evitar interpretaciones incompatibles.
+La única migración admitida es v3→v4 y se ejecuta en una transacción. Preserva
+datasets, chunks, staging, checkpoints de finalización y generaciones finales;
+elimina las tablas obsoletas `ngram_counts`, `ngram_totals` y
+`ngram_compactions`. Las versiones v0–v2 requieren reextracción o conversión
+externa. Una versión superior a 4 se rechaza incluso en modo de lectura.
 
 ## Límites y recuperación
 
@@ -105,7 +109,7 @@ rechaza incluso en modo de lectura para evitar interpretaciones incompatibles.
 |---|---|---|
 | Corpus | fila + shard actual | último shard confirmado |
 | Extracción | deque `max_n` + contador configurado | último documento/segmento transaccional |
-| Finalización | temporales administrados por DuckDB | rollback de generación |
+| Finalización | un bucket de un tamaño `n` | último bucket confirmado |
 | Exportación | una fila + buffer de archivo | final anterior intacto |
 
 ## Verificación
@@ -116,5 +120,5 @@ uv run ruff check .
 ```
 
 Las pruebas cubren fallos inyectados, replay, identidades múltiples,
-adaptadores de corpus, migración v0/v1 y v2, idempotencia, rechazo de esquemas
-futuros y ausencia de tablas UPOS tras migrar.
+adaptadores de corpus, migración v3→v4, idempotencia, rechazo de esquemas
+antiguos/futuros y ausencia de las tablas de compactación retiradas.

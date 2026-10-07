@@ -95,7 +95,7 @@ def read_complete_manifest(
 
 
 def compute_artifact_id(path: Path) -> str:
-    """Hash an unmanifested legacy input as an immutable ordered artifact."""
+    """Hash an unmanifested raw input as an immutable ordered artifact."""
     files = (
         [path]
         if path.is_file()
@@ -119,7 +119,7 @@ def compute_artifact_id(path: Path) -> str:
         }
         for file in files
     ]
-    return stable_id("legacy-artifact", entries)
+    return stable_id("raw-artifact", entries)
 
 
 class ArtifactLock:

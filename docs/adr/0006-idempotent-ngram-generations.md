@@ -23,13 +23,12 @@ only becomes visible after every part is validated and activated in one final
 transaction. Successful activation removes staging unless retention is
 explicitly requested.
 
-New databases use schema version 3 and store only textual counts plus
-`has_punctuation`. Existing databases require the explicit
-`sp_ngrams db migrate` operation; v0/v1 gain `has_punctuation=false`, while v2
-keeps textual rows and drops all UPOS tables. Read-only inspection never
-migrates, and versions newer than the supported one are rejected. When an
-alias resolves to multiple immutable datasets, readers require `dataset_id`.
-TSV exports use a partial file, checksum manifest and atomic promotion.
+ADR 0010 updates the storage contract to generation-only schema v4. Its only
+supported migration is v3→v4; older schemas require re-extraction or external
+conversion. Read-only inspection never migrates, and versions newer than the
+supported one are rejected. When an alias resolves to multiple immutable
+datasets, readers require `dataset_id`. TSV exports use a partial file,
+checksum manifest and atomic promotion.
 
 ## Consequences
 

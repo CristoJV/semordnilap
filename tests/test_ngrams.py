@@ -6,17 +6,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from semordnilap.ngrams.cli.extract import (
-    build_argparser,
-    command_from_args,
-    log_stats,
-)
 from semordnilap.ngrams.application import (
     ExtractNgramsCommand,
     count_corpus,
     export_tsv,
-    compact_all_counts,
     run_extraction,
+)
+from semordnilap.ngrams.cli.extract import (
+    build_argparser,
+    command_from_args,
+    log_stats,
 )
 from semordnilap.ngrams.domain import (
     ExtractedNgram,
@@ -34,11 +33,11 @@ from semordnilap.ngrams.infrastructure import DuckDbNgramCountRepository
 from semordnilap.utils.io import iter_texts
 
 
-def build_options(corpus, output, lang):
+def build_options(corpus, output, lang, *, corpus_name="test"):
     return ExtractNgramsCommand(
         input_path=corpus,
         output_path=output,
-        corpus="test",
+        corpus=corpus_name,
         input_format="txt",
         text_field="text",
         min_count=1,
@@ -46,7 +45,6 @@ def build_options(corpus, output, lang):
         export_n=0,
         min_export_norm_len=0,
         max_export_norm_len=0,
-        export_source="auto",
         export_log_every=0,
         limit_docs=0,
         flush_unique_ngrams=250_000,
@@ -54,82 +52,8 @@ def build_options(corpus, output, lang):
         export_only=False,
         export_after_count=True,
         delete_only=False,
-        compact_only=False,
-        compact_n=0,
         policy=NgramExtractionPolicy(lang=lang, max_n=2),
     )
-
-
-def test_sentence_chunks_do_not_cross_strong_punctuation():
-    text = "La casa. El camino"
-
-    chunks = list(iter_sentence_chunks(text))
-    tokenized = [tokenize_sentence(chunk) for chunk in chunks]
-
-    assert tokenized == [["la", "casa"], ["el", "camino"]]
-
-
-def test_sentence_chunks_split_on_every_punctuation_character():
-    text = "La niña, el perro—y la gata"
-
-    chunks = list(iter_sentence_chunks(text))
-    tokenized = [tokenize_sentence(chunk) for chunk in chunks]
-
-    assert tokenized == [["la", "niña"], ["el", "perro"], ["y", "la", "gata"]]
-
-
-def test_extraction_can_retain_punctuation_without_counting_it_as_a_token():
-    counts = extract_counts_from_text(
-        "La niña, el perro.",
-        NgramExtractionPolicy(
-            lang="es",
-            max_n=2,
-            omit_punctuation=False,
-        ),
-    )
-
-    assert counts[ExtractedNgram(("niña", "el"), "niña, el")] == 1
-    assert counts[ExtractedNgram(("niña",), "niña")] == 1
-    assert counts[ExtractedNgram(("perro",), "perro")] == 1
-
-    row = build_ngram_count(
-        ("niña,", "el"),
-        count=1,
-        lang="es",
-        corpus="test",
-        fold_nasal_letters=False,
-    )
-    assert row.text == "niña, el"
-    assert row.tokens == ("niña", "el")
-    assert row.n == 2
-    assert row.norm_key == "niñael"
-    assert row.has_punctuation is True
-
-
-def test_extraction_crosses_punctuation_by_default():
-    counts = extract_counts_from_text(
-        "La niña, el perro.",
-        NgramExtractionPolicy(lang="es", max_n=2),
-    )
-
-    assert ExtractedNgram(("niña", "el"), "niña, el") in counts
-
-
-def test_normalization_v2_preserves_nasal_n_unless_explicitly_folded():
-    assert normalize_ngram("niña") == "niña"
-    assert normalize_ngram("niña", fold_nasal_letters=True) == "nina"
-    assert normalize_ngram("coração") == "coracao"
-
-
-def test_unicode_tokenizer_keeps_apostrophe_and_hyphen_words():
-    counts = extract_counts_from_text(
-        "D'Artagnan fala co-operar.",
-        NgramExtractionPolicy(lang="gl", max_n=1),
-    )
-
-    tokens = {ngram.tokens for ngram in counts}
-    assert ("d'artagnan",) in tokens
-    assert ("co-operar",) in tokens
 
 
 def collect_counts(opts, db_path):
@@ -144,84 +68,74 @@ def collect_counts(opts, db_path):
     return counts
 
 
-def test_count_corpus_crosses_sentence_boundaries_by_default(tmp_path):
-    corpus = tmp_path / "corpus.txt"
-    corpus.write_text("La casa. El camino\n", encoding="utf-8")
-
-    opts = build_options(corpus, tmp_path / "ngrams.tsv", "es")
-
-    counts = collect_counts(opts, tmp_path / "ngrams.duckdb")
-
-    assert ("casa", "el") in counts
-    assert counts[("la", "casa")] == 1
-    assert counts[("el", "camino")] == 1
-
-
-def test_export_ngrams_writes_expected_tsv(tmp_path):
-    corpus = tmp_path / "corpus.txt"
-    output = tmp_path / "ngrams.tsv"
-    corpus.write_text("À dor. A dor.\n", encoding="utf-8")
-
-    opts = build_options(corpus, output, "pt")
-
-    repository = DuckDbNgramCountRepository(tmp_path / "ngrams.duckdb")
-    count_corpus(opts, repository)
-    export_tsv(opts, repository)
-    repository.close()
-
-    with output.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f, delimiter="\t")
-        rows = list(reader)
-
-    assert reader.fieldnames == [
-        "lang",
-        "corpus",
-        "text",
-        "n",
-        "count",
-        "score",
-        "norm_key",
-        "has_punctuation",
+def test_sentence_chunks_split_on_every_punctuation_character():
+    chunks = list(iter_sentence_chunks("La niña, el perro—y la gata"))
+    assert [tokenize_sentence(chunk) for chunk in chunks] == [
+        ["la", "niña"],
+        ["el", "perro"],
+        ["y", "la", "gata"],
     ]
-    assert any(
-        row["text"] == "À dor" and row["norm_key"] == "ador" for row in rows
+
+
+def test_default_extraction_keeps_and_crosses_punctuation():
+    counts = extract_counts_from_text(
+        "La niña, el perro.", NgramExtractionPolicy(lang="es", max_n=2)
     )
+    assert counts[ExtractedNgram(("niña", "el"), "niña, el")] == 1
+
+
+def test_punctuation_boundary_filter_is_opt_in():
+    counts = extract_counts_from_text(
+        "La niña, el perro.",
+        NgramExtractionPolicy(
+            lang="es", max_n=2, filter_punctuation_boundaries=True
+        ),
+    )
+    assert ExtractedNgram(("niña", "el"), "niña, el") not in counts
+
+
+def test_all_stopword_ngrams_are_included_by_default_and_filter_is_opt_in():
+    default = extract_counts_from_text(
+        "De a casa", NgramExtractionPolicy(lang="gl", max_n=2)
+    )
+    filtered = extract_counts_from_text(
+        "De a casa",
+        NgramExtractionPolicy(
+            lang="gl", max_n=2, filter_all_stopword_ngrams=True
+        ),
+    )
+    key = ExtractedNgram(("de", "a"), "de a")
+    assert key in default
+    assert key not in filtered
+    assert ExtractedNgram(("a", "casa"), "a casa") in filtered
+
+
+def test_default_normalization_folds_nasal_n_and_can_preserve_it():
+    assert normalize_ngram("niña") == "nina"
+    assert normalize_ngram("niña", preserve_nasal_letters=True) == "niña"
     assert normalize_ngram("coração") == "coracao"
 
 
-def test_tokenization_ignores_urls_and_markers():
-    text = "A casa {{marca}} https://example.com. O caminho [[nota]]"
-
-    chunks = list(iter_sentence_chunks(text))
-    tokenized = [tokenize_sentence(chunk) for chunk in chunks]
-
-    assert tokenized == [["a", "casa"], ["o", "caminho"]]
-
-
-def test_extraction_supports_english_french_and_galician():
-    examples = [
-        ("en", "I saw a house.", ("i", "saw")),
-        ("fr", "Il va à Paris.", ("va", "à")),
-        ("gl", "A casa e o camiño.", ("casa", "e")),
-    ]
-
-    for lang, text, expected in examples:
-        counts = extract_counts_for_lang(text, lang)
-        assert any(
-            getattr(ngram, "tokens", ngram) == expected for ngram in counts
-        )
-
-
-def extract_counts_for_lang(text, lang):
-    from semordnilap.ngrams.domain import extract_counts_from_text
-
-    return extract_counts_from_text(
-        text,
-        NgramExtractionPolicy(lang=lang, max_n=2),
+def test_build_count_tracks_punctuation_and_default_normalization():
+    row = build_ngram_count(
+        ("niña,", "el"), count=1, lang="es", corpus="test"
     )
+    assert row.text == "niña, el"
+    assert row.tokens == ("niña", "el")
+    assert row.norm_key == "ninael"
+    assert row.has_punctuation is True
 
 
-def test_stopword_filters_include_new_languages():
+def test_unicode_tokenizer_keeps_apostrophe_and_hyphen_words():
+    counts = extract_counts_from_text(
+        "D'Artagnan fala co-operar.", NgramExtractionPolicy(lang="gl", max_n=1)
+    )
+    tokens = {ngram.tokens for ngram in counts}
+    assert ("d'artagnan",) in tokens
+    assert ("co-operar",) in tokens
+
+
+def test_stopword_tables_cover_supported_languages():
     assert is_all_stopwords(("the", "and"), "en")
     assert is_all_stopwords(("de", "la"), "fr")
     assert is_all_stopwords(("de", "a"), "gl")
@@ -232,34 +146,47 @@ def test_iter_texts_accepts_corpus_directory(tmp_path):
     nested = tmp_path / "nested"
     nested.mkdir()
     (nested / "two.txt").write_text("dos\n", encoding="utf-8")
-
     assert list(iter_texts(tmp_path, "txt")) == ["uno\n", "dos\n"]
 
 
-def test_extract_subcommand_counts_without_exporting():
+def test_extract_cli_has_minimally_restrictive_defaults():
     args = build_argparser().parse_args(
-        [
-            "extract",
-            "--input",
-            "corpus.jsonl",
-            "--lang",
-            "ES",
-            "--corpus",
-            "wikisource",
-            "--format",
-            "jsonl",
-        ]
+        ["extract", "--input", "corpus.txt", "--lang", "GL"]
     )
+    policy = command_from_args(args).policy
+    assert policy.lang == "gl"
+    assert policy.filter_min_token_len == 2
+    assert policy.filter_max_token_len == 30
+    assert policy.filter_min_norm_len == 2
+    assert policy.filter_all_stopword_ngrams is False
+    assert policy.filter_punctuation_boundaries is False
+    assert policy.preserve_nasal_letters is False
 
-    command = command_from_args(args)
 
-    assert command.policy.lang == "es"
-    assert command.input_path.name == "corpus.jsonl"
-    assert command.export_after_count is False
-    assert command.policy.omit_punctuation is False
+def test_extract_cli_exposes_explicit_filter_options_only():
+    parser = build_argparser()
+    extract = parser._subparsers._group_actions[0].choices["extract"]
+    rendered = extract.format_help()
+    assert "--filter-min-token-len" in rendered
+    assert "--filter-max-token-len" in rendered
+    assert "--filter-min-norm-len" in rendered
+    assert "--filter-all-stopword-ngrams" in rendered
+    assert "--filter-punctuation-boundaries" in rendered
+    assert "--preserve-nasal-letters" in rendered
+    for obsolete in (
+        "--min-token-len",
+        "--include-all-stopword-ngrams",
+        "--fold-nasal-letters",
+        "--omit-punctuation",
+        "--chunk-docs",
+        "--no-compact-after-count",
+    ):
+        assert obsolete not in rendered
+    db = parser._subparsers._group_actions[0].choices["db"]
+    assert "compact" not in db._subparsers._group_actions[0].choices
 
 
-def test_extract_subcommand_can_set_punctuation_boundary():
+def test_extract_cli_can_enable_filters_and_preserve_nasal_letters():
     args = build_argparser().parse_args(
         [
             "extract",
@@ -267,25 +194,119 @@ def test_extract_subcommand_can_set_punctuation_boundary():
             "corpus.txt",
             "--lang",
             "es",
-            "--punctuation",
-            "boundary",
+            "--filter-min-token-len",
+            "3",
+            "--filter-max-token-len",
+            "20",
+            "--filter-min-norm-len",
+            "4",
+            "--filter-all-stopword-ngrams",
+            "--filter-punctuation-boundaries",
+            "--preserve-nasal-letters",
         ]
     )
+    policy = command_from_args(args).policy
+    assert policy.filter_min_token_len == 3
+    assert policy.filter_max_token_len == 20
+    assert policy.filter_min_norm_len == 4
+    assert policy.filter_all_stopword_ngrams is True
+    assert policy.filter_punctuation_boundaries is True
+    assert policy.preserve_nasal_letters is True
 
-    command = command_from_args(args)
 
-    assert command.policy.omit_punctuation is True
+def test_count_corpus_finalizes_generation_and_is_idempotent(tmp_path):
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text("La casa. El camino\n", encoding="utf-8")
+    opts = build_options(corpus, tmp_path / "ngrams.tsv", "es")
+    first = collect_counts(opts, tmp_path / "ngrams.duckdb")
+    replay = collect_counts(opts, tmp_path / "ngrams.duckdb")
+    assert first == replay
+    assert replay[("casa", "el")] == 1
 
 
-def test_extract_help_explains_defaults_and_hides_obsolete_switches():
-    parser = build_argparser()
-    extract = parser._subparsers._group_actions[0].choices["extract"]
-    rendered = extract.format_help()
+def test_reset_rebuilds_only_matching_dataset(tmp_path):
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text("La casa\n", encoding="utf-8")
+    db_path = tmp_path / "ngrams.duckdb"
+    opts = build_options(corpus, tmp_path / "ngrams.tsv", "es")
+    collect_counts(opts, db_path)
+    reset = collect_counts(replace(opts, reset=True), db_path)
+    assert reset[("la", "casa")] == 1
 
-    assert "--punctuation {keep,boundary}" in rendered
-    assert "(default: keep)" in rendered
-    assert "--chunk-docs" not in rendered
-    assert "--no-compact-after-count" not in rendered
+
+def test_export_reads_only_final_generation_and_applies_read_filters(tmp_path):
+    corpus = tmp_path / "corpus.txt"
+    output = tmp_path / "ngrams.tsv"
+    corpus.write_text("Casa casa. La casa azul.\n", encoding="utf-8")
+    opts = replace(
+        build_options(corpus, output, "es"),
+        export_n=1,
+        min_export_norm_len=4,
+        max_results=1,
+    )
+    repository = DuckDbNgramCountRepository(tmp_path / "ngrams.duckdb")
+    count_corpus(opts, repository)
+    assert export_tsv(opts, repository) == 1
+    repository.close()
+    with output.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f, delimiter="\t"))
+    assert rows[0]["text"].casefold() == "casa"
+    assert rows[0]["count"] == "3"
+
+
+def test_punctuation_metadata_is_persisted_and_exported(tmp_path):
+    corpus = tmp_path / "corpus.txt"
+    output = tmp_path / "ngrams.tsv"
+    corpus.write_text("La niña, el perro.\n", encoding="utf-8")
+    opts = build_options(corpus, output, "es")
+    repository = DuckDbNgramCountRepository(tmp_path / "ngrams.duckdb")
+    count_corpus(opts, repository)
+    rows = list(repository.iter_counts(lang="es", corpus="test", min_count=1))
+    export_tsv(opts, repository)
+    repository.close()
+    punctuated = next(row for row in rows if row.text == "niña, el")
+    assert punctuated.has_punctuation is True
+    assert punctuated.norm_key == "ninael"
+
+
+def test_delete_only_removes_one_collection(tmp_path):
+    db_path = tmp_path / "ngrams.duckdb"
+    es = tmp_path / "es.txt"
+    en = tmp_path / "en.txt"
+    es.write_text("La casa\n", encoding="utf-8")
+    en.write_text("The house\n", encoding="utf-8")
+    collect_counts(build_options(es, tmp_path / "es.tsv", "es"), db_path)
+    collect_counts(build_options(en, tmp_path / "en.tsv", "en"), db_path)
+    opts = replace(
+        build_options(es, tmp_path / "unused.tsv", "es"), delete_only=True
+    )
+    assert run_extraction(opts, DuckDbNgramCountRepository(db_path)) > 0
+    repository = DuckDbNgramCountRepository(db_path)
+    assert repository.stats(lang="es", corpus="test")["datasets"] == []
+    assert list(repository.iter_counts(lang="en", corpus="test", min_count=1))
+    repository.close()
+
+
+def test_stats_describe_only_generation_storage(tmp_path, caplog):
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text("A casa azul\n", encoding="utf-8")
+    db_path = tmp_path / "ngrams.duckdb"
+    collect_counts(build_options(corpus, tmp_path / "out.tsv", "gl"), db_path)
+    repository = DuckDbNgramCountRepository(db_path)
+    stats = repository.stats(lang="gl", corpus="test", include_top_rows=True)
+    inventory = {row[0] for row in stats["table_inventory"]}
+    assert stats["schema_version"] == 4
+    assert stats["datasets"][0][7] == "complete"
+    assert stats["generation_by_n"]
+    assert stats["top_rows"]
+    assert {"ngram_counts", "ngram_totals", "ngram_compactions"}.isdisjoint(
+        inventory
+    )
+    caplog.set_level(logging.INFO, logger="semordnilap.ngrams.cli.extract")
+    log_stats(repository, SimpleNamespace(lang="gl", corpus="test", verbose=True))
+    repository.close()
+    assert "matching final counts by n:" in caplog.text
+    assert "ngram_counts" not in caplog.text
 
 
 def test_extract_rejects_detected_annotated_input(tmp_path):
@@ -297,516 +318,5 @@ def test_extract_rejects_detected_annotated_input(tmp_path):
     args = build_argparser().parse_args(
         ["extract", "--input", str(annotated), "--lang", "gl"]
     )
-
     with pytest.raises(ValueError, match="no longer supported"):
         command_from_args(args)
-
-
-def test_punctuation_metadata_is_persisted_and_exported(tmp_path):
-    corpus = tmp_path / "corpus.txt"
-    output = tmp_path / "ngrams.tsv"
-    corpus.write_text("La niña, el perro.\n", encoding="utf-8")
-    opts = replace(
-        build_options(corpus, output, "es"),
-        policy=NgramExtractionPolicy(
-            lang="es",
-            max_n=2,
-            omit_punctuation=False,
-        ),
-    )
-
-    repository = DuckDbNgramCountRepository(tmp_path / "ngrams.duckdb")
-    count_corpus(opts, repository)
-    rows = list(repository.iter_counts(lang="es", corpus="test", min_count=1))
-    export_tsv(opts, repository)
-    repository.close()
-
-    punctuated = next(row for row in rows if row.text == "niña, el")
-    assert punctuated.has_punctuation is True
-    assert punctuated.n == 2
-    assert punctuated.norm_key == "niñael"
-
-    with output.open("r", encoding="utf-8", newline="") as f:
-        exported = list(csv.DictReader(f, delimiter="\t"))
-    exported_punctuated = next(
-        row for row in exported if row["text"] == "niña, el"
-    )
-    assert exported_punctuated["has_punctuation"] == "True"
-
-
-def test_export_subcommand_uses_existing_database_counts():
-    args = build_argparser().parse_args(
-        [
-            "export",
-            "--lang",
-            "es",
-            "--corpus",
-            "wikisource",
-            "--out",
-            "ngrams.tsv",
-        ]
-    )
-
-    command = command_from_args(args)
-
-    assert command.export_only is True
-    assert command.export_after_count is True
-    assert command.output_path.name == "ngrams.tsv"
-
-
-def test_db_delete_subcommand_targets_lang_corpus():
-    args = build_argparser().parse_args(
-        [
-            "db",
-            "delete",
-            "--lang",
-            "es",
-            "--corpus",
-            "wikisource",
-        ]
-    )
-
-    command = command_from_args(args)
-
-    assert command.delete_only is True
-    assert command.corpus == "wikisource"
-
-
-def test_reset_recomputes_lang_corpus_counts(tmp_path):
-    corpus = tmp_path / "corpus.txt"
-    corpus.write_text("La casa\n", encoding="utf-8")
-    db_path = tmp_path / "ngrams.duckdb"
-
-    opts = build_options(corpus, tmp_path / "ngrams.tsv", "es")
-    collect_counts(opts, db_path)
-    doubled = collect_counts(opts, db_path)
-
-    reset_opts = ExtractNgramsCommand(
-        input_path=opts.input_path,
-        output_path=opts.output_path,
-        corpus=opts.corpus,
-        input_format=opts.input_format,
-        text_field=opts.text_field,
-        min_count=opts.min_count,
-        max_results=opts.max_results,
-        export_n=opts.export_n,
-        min_export_norm_len=opts.min_export_norm_len,
-        max_export_norm_len=opts.max_export_norm_len,
-        export_source=opts.export_source,
-        export_log_every=opts.export_log_every,
-        limit_docs=opts.limit_docs,
-        flush_unique_ngrams=opts.flush_unique_ngrams,
-        reset=True,
-        export_only=opts.export_only,
-        export_after_count=opts.export_after_count,
-        delete_only=opts.delete_only,
-        compact_only=opts.compact_only,
-        compact_n=opts.compact_n,
-        policy=opts.policy,
-    )
-    reset = collect_counts(reset_opts, db_path)
-
-    assert doubled[("la", "casa")] == 1
-    assert reset[("la", "casa")] == 1
-
-
-def test_partial_count_rows_are_aggregated(tmp_path):
-    db_path = tmp_path / "ngrams.duckdb"
-    repository = DuckDbNgramCountRepository(db_path)
-
-    repository.add_counts(
-        Counter({("la", "casa"): 2}),
-        lang="es",
-        corpus="test",
-        fold_nasal_letters=False,
-    )
-    repository.add_counts(
-        Counter({("la", "casa"): 3}),
-        lang="es",
-        corpus="test",
-        fold_nasal_letters=False,
-    )
-
-    rows = list(repository.iter_counts(lang="es", corpus="test", min_count=1))
-    repository.close()
-
-    assert len(rows) == 1
-    assert rows[0].tokens == ("la", "casa")
-    assert rows[0].count == 5
-
-
-def test_export_tsv_respects_max_results(tmp_path):
-    db_path = tmp_path / "ngrams.duckdb"
-    output = tmp_path / "ngrams.tsv"
-    repository = DuckDbNgramCountRepository(db_path)
-    repository.add_counts(
-        Counter({("la", "casa"): 10, ("el", "camino"): 8}),
-        lang="es",
-        corpus="test",
-        fold_nasal_letters=False,
-    )
-
-    opts = ExtractNgramsCommand(
-        input_path=None,
-        output_path=output,
-        corpus="test",
-        input_format="txt",
-        text_field="text",
-        min_count=1,
-        max_results=1,
-        export_n=0,
-        min_export_norm_len=0,
-        max_export_norm_len=0,
-        export_source="auto",
-        export_log_every=0,
-        limit_docs=0,
-        flush_unique_ngrams=250_000,
-        reset=False,
-        export_only=True,
-        export_after_count=True,
-        delete_only=False,
-        compact_only=False,
-        compact_n=0,
-        policy=NgramExtractionPolicy(lang="es", max_n=2),
-    )
-    exported = export_tsv(opts, repository)
-    repository.close()
-
-    with output.open("r", encoding="utf-8", newline="") as f:
-        rows = list(csv.DictReader(f, delimiter="\t"))
-
-    assert exported == 1
-    assert rows[0]["text"] == "la casa"
-
-
-def test_export_tsv_can_filter_by_n_and_norm_length(tmp_path):
-    db_path = tmp_path / "ngrams.duckdb"
-    output = tmp_path / "ngrams.tsv"
-    repository = DuckDbNgramCountRepository(db_path)
-    repository.add_counts(
-        Counter(
-            {
-                ("casa",): 10,
-                ("la", "casa"): 9,
-                ("el", "largo", "camino"): 8,
-            }
-        ),
-        lang="es",
-        corpus="test",
-        fold_nasal_letters=False,
-    )
-
-    opts = ExtractNgramsCommand(
-        input_path=None,
-        output_path=output,
-        corpus="test",
-        input_format="txt",
-        text_field="text",
-        min_count=1,
-        max_results=0,
-        export_n=2,
-        min_export_norm_len=5,
-        max_export_norm_len=8,
-        export_source="auto",
-        export_log_every=0,
-        limit_docs=0,
-        flush_unique_ngrams=250_000,
-        reset=False,
-        export_only=True,
-        export_after_count=True,
-        delete_only=False,
-        compact_only=False,
-        compact_n=0,
-        policy=NgramExtractionPolicy(lang="es", max_n=3),
-    )
-    exported = export_tsv(opts, repository)
-    repository.close()
-
-    with output.open("r", encoding="utf-8", newline="") as f:
-        rows = list(csv.DictReader(f, delimiter="\t"))
-
-    assert exported == 1
-    assert rows[0]["text"] == "la casa"
-
-
-def test_compacted_counts_can_be_used_for_export(tmp_path):
-    db_path = tmp_path / "ngrams.duckdb"
-    output = tmp_path / "ngrams.tsv"
-    repository = DuckDbNgramCountRepository(db_path)
-    repository.add_counts(
-        Counter({("la", "casa"): 2}),
-        lang="es",
-        corpus="test",
-        fold_nasal_letters=False,
-    )
-    repository.add_counts(
-        Counter({("la", "casa"): 3, ("casa",): 7}),
-        lang="es",
-        corpus="test",
-        fold_nasal_letters=False,
-    )
-
-    compacted = repository.compact_counts(lang="es", corpus="test", n=2)
-
-    opts = ExtractNgramsCommand(
-        input_path=None,
-        output_path=output,
-        corpus="test",
-        input_format="txt",
-        text_field="text",
-        min_count=1,
-        max_results=0,
-        export_n=2,
-        min_export_norm_len=0,
-        max_export_norm_len=0,
-        export_source="auto",
-        export_log_every=0,
-        limit_docs=0,
-        flush_unique_ngrams=250_000,
-        reset=False,
-        export_only=True,
-        export_after_count=True,
-        delete_only=False,
-        compact_only=False,
-        compact_n=0,
-        policy=NgramExtractionPolicy(lang="es", max_n=2),
-    )
-    exported = export_tsv(opts, repository)
-    repository.close()
-
-    with output.open("r", encoding="utf-8", newline="") as f:
-        rows = list(csv.DictReader(f, delimiter="\t"))
-
-    assert compacted == 1
-    assert exported == 1
-    assert rows[0]["text"] == "la casa"
-    assert rows[0]["count"] == "5"
-
-
-def test_adding_raw_counts_invalidates_stale_compaction(tmp_path):
-    db_path = tmp_path / "ngrams.duckdb"
-    repository = DuckDbNgramCountRepository(db_path)
-    repository.add_counts(
-        Counter({("casa",): 2}),
-        lang="es",
-        corpus="test",
-        fold_nasal_letters=False,
-    )
-    repository.compact_counts(lang="es", corpus="test", n=1)
-
-    repository.add_counts(
-        Counter({("casa",): 3}),
-        lang="es",
-        corpus="test",
-        fold_nasal_letters=False,
-    )
-    stats = repository.stats(lang="es", corpus="test")
-    rows = list(repository.iter_counts(lang="es", corpus="test", min_count=1))
-    repository.close()
-
-    assert stats["compacted"] == []
-    assert stats["totals_by_n"] == []
-    assert rows[0].text == "casa"
-    assert rows[0].count == 5
-
-
-def test_delete_only_removes_lang_corpus_storage(tmp_path):
-    db_path = tmp_path / "ngrams.duckdb"
-    repository = DuckDbNgramCountRepository(db_path)
-    repository.add_counts(
-        Counter({("casa",): 2}),
-        lang="es",
-        corpus="test",
-        fold_nasal_letters=False,
-    )
-    repository.compact_counts(lang="es", corpus="test", n=1)
-    repository.add_counts(
-        Counter({("house",): 4}),
-        lang="en",
-        corpus="test",
-        fold_nasal_letters=False,
-    )
-    repository.close()
-
-    opts = replace(
-        build_options(tmp_path / "unused.txt", tmp_path / "unused.tsv", "es"),
-        delete_only=True,
-    )
-    deleted = run_extraction(opts, DuckDbNgramCountRepository(db_path))
-
-    repository = DuckDbNgramCountRepository(db_path)
-    es_stats = repository.stats(lang="es", corpus="test")
-    en_rows = list(
-        repository.iter_counts(lang="en", corpus="test", min_count=1)
-    )
-    repository.close()
-
-    assert deleted == 3
-    assert es_stats["by_lang_corpus"] == []
-    assert es_stats["totals_by_n"] == []
-    assert es_stats["compacted"] == []
-    assert len(en_rows) == 1
-    assert en_rows[0].text == "house"
-
-
-def test_stats_include_filtered_table_counts(tmp_path):
-    db_path = tmp_path / "ngrams.duckdb"
-    repository = DuckDbNgramCountRepository(db_path)
-    repository.add_counts(
-        Counter({("casa",): 2}),
-        lang="es",
-        corpus="test",
-        fold_nasal_letters=False,
-    )
-    repository.compact_counts(lang="es", corpus="test", n=1)
-    repository.add_counts(
-        Counter({("house",): 4}),
-        lang="en",
-        corpus="test",
-        fold_nasal_letters=False,
-    )
-
-    stats = repository.stats(lang="fr", corpus="test")
-    global_stats = repository.stats()
-    global_counts = dict(global_stats["table_counts"])
-    filtered_counts = dict(stats["filtered_table_counts"])
-    repository.close()
-
-    assert filtered_counts == {
-        "ngram_compactions": 0,
-        "ngram_counts": 0,
-        "ngram_totals": 0,
-    }
-    assert global_counts["ngram_counts"] == 2
-    assert global_counts["ngram_totals"] == 1
-    assert global_counts["ngram_compactions"] == 1
-    assert global_stats["schema_version"] == 3
-    assert [row[:2] for row in stats["legacy_collections"]] == [
-        ("en", "test"),
-        ("es", "test"),
-    ]
-    inventory = {row[0]: row[1:] for row in stats["table_inventory"]}
-    assert inventory["ngram_counts"][1] == 2
-    assert inventory["ngram_totals"][1] == 1
-
-
-def test_stats_output_lists_available_collections_when_filter_misses(
-    tmp_path, caplog
-):
-    repository = DuckDbNgramCountRepository(tmp_path / "ngrams.duckdb")
-    repository.add_counts(
-        Counter({("casa",): 2}),
-        lang="es",
-        corpus="wikisource_20231201",
-        fold_nasal_letters=False,
-    )
-    repository.compact_counts(lang="es", corpus="wikisource_20231201", n=1)
-    caplog.set_level(logging.INFO, logger="semordnilap.ngrams.cli.extract")
-
-    log_stats(
-        repository,
-        SimpleNamespace(lang="gl", corpus="missing", verbose=False),
-    )
-    repository.close()
-
-    output = caplog.text
-    assert "database tables:" in output
-    assert "available collections (lang/corpus):" in output
-    assert "es/wikisource_20231201" in output
-    assert "compacted_n=1" in output
-    assert "matching selection: no data matched all filters" in output
-    assert "choose one of the exact lang/corpus aliases" in output
-
-
-def test_export_auto_uses_complete_compaction_for_all_n(tmp_path):
-    db_path = tmp_path / "ngrams.duckdb"
-    repository = DuckDbNgramCountRepository(db_path)
-    repository.add_counts(
-        Counter({("casa",): 2, ("la", "casa"): 3}),
-        lang="es",
-        corpus="test",
-        fold_nasal_letters=False,
-    )
-    repository.compact_counts(lang="es", corpus="test", n=1)
-    repository.compact_counts(lang="es", corpus="test", n=2)
-
-    table = repository._select_counts_table(
-        lang="es",
-        corpus="test",
-        export_n=0,
-        source="auto",
-    )
-    repository.close()
-
-    assert table == "ngram_totals"
-
-
-def test_run_extraction_compacts_after_count(tmp_path):
-    corpus = tmp_path / "corpus.txt"
-    output = tmp_path / "ngrams.tsv"
-    db_path = tmp_path / "ngrams.duckdb"
-    corpus.write_text("La casa. La casa.\n", encoding="utf-8")
-
-    opts = build_options(corpus, output, "es")
-    repository = DuckDbNgramCountRepository(db_path)
-
-    exported = run_extraction(opts, repository)
-
-    repository = DuckDbNgramCountRepository(db_path)
-    stats = repository.stats(lang="es", corpus="test")
-    repository.close()
-
-    datasets = stats["v2_datasets"]
-    table_counts = dict(stats["v2_table_counts"])
-
-    assert exported > 0
-    assert datasets[0][6] == "complete"
-    assert table_counts["ngram_stage_v2"] == 0
-    assert table_counts["ngram_final_v2"] > 0
-    assert stats["generation_collections"][0][:2] == ("es", "test")
-    assert stats["generation_by_n"]
-    assert {row[3] for row in stats["generation_by_n"]} == {1, 2}
-
-
-def test_compact_all_counts_runs_progressively(tmp_path):
-    db_path = tmp_path / "ngrams.duckdb"
-    repository = DuckDbNgramCountRepository(db_path)
-    repository.add_counts(
-        Counter({("casa",): 2, ("la", "casa"): 3, ("la", "casa", "azul"): 4}),
-        lang="es",
-        corpus="test",
-        fold_nasal_letters=False,
-    )
-
-    opts = ExtractNgramsCommand(
-        input_path=None,
-        output_path=tmp_path / "ngrams.tsv",
-        corpus="test",
-        input_format="txt",
-        text_field="text",
-        min_count=1,
-        max_results=0,
-        export_n=0,
-        min_export_norm_len=0,
-        max_export_norm_len=0,
-        export_source="auto",
-        export_log_every=0,
-        limit_docs=0,
-        flush_unique_ngrams=250_000,
-        reset=False,
-        export_only=False,
-        export_after_count=False,
-        delete_only=False,
-        compact_only=True,
-        compact_n=0,
-        policy=NgramExtractionPolicy(lang="es", max_n=3),
-    )
-
-    compacted = compact_all_counts(opts, repository)
-    stats = repository.stats(lang="es", corpus="test")
-    repository.close()
-
-    compacted_n = {row[2] for row in stats["compacted"]}
-
-    assert compacted == 3
-    assert compacted_n == {1, 2, 3}

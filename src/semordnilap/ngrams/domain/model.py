@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -30,24 +29,27 @@ NgramKey = tuple[str, ...] | ExtractedNgram
 class NgramExtractionPolicy:
     lang: str
     max_n: int = 3
-    min_token_len: int = 2
-    max_token_len: int = 30
-    min_norm_len: int = 3
-    include_all_stopword_ngrams: bool = False
-    fold_nasal_letters: bool = False
-    omit_punctuation: bool = False
+    filter_min_token_len: int = 2
+    filter_max_token_len: int = 30
+    filter_min_norm_len: int = 2
+    filter_all_stopword_ngrams: bool = False
+    preserve_nasal_letters: bool = False
+    filter_punctuation_boundaries: bool = False
 
     def __post_init__(self) -> None:
         if not self.lang.strip():
             raise ValueError("lang cannot be empty")
         if not 1 <= self.max_n <= 3:
             raise ValueError("max_n must be between 1 and 3")
-        if self.min_token_len < 1:
-            raise ValueError("min_token_len must be at least 1")
-        if self.max_token_len < self.min_token_len:
-            raise ValueError("max_token_len cannot be less than min_token_len")
-        if self.min_norm_len < 0:
-            raise ValueError("min_norm_len cannot be negative")
+        if self.filter_min_token_len < 1:
+            raise ValueError("filter_min_token_len must be at least 1")
+        if self.filter_max_token_len < self.filter_min_token_len:
+            raise ValueError(
+                "filter_max_token_len cannot be less than "
+                "filter_min_token_len"
+            )
+        if self.filter_min_norm_len < 1:
+            raise ValueError("filter_min_norm_len must be at least 1")
 
 
 @dataclass(frozen=True)
@@ -72,21 +74,11 @@ class NgramCount:
             self.tokens,
             count=self.count,
             lang=policy.lang,
-            fold_nasal_letters=policy.fold_nasal_letters,
+            preserve_nasal_letters=policy.preserve_nasal_letters,
         )
 
 
 class NgramCountRepository(Protocol):
-    def add_counts(
-        self,
-        counts: Counter[NgramKey],
-        *,
-        lang: str,
-        corpus: str,
-        fold_nasal_letters: bool,
-    ) -> None:
-        raise NotImplementedError
-
     def iter_counts(
         self,
         *,
@@ -97,15 +89,8 @@ class NgramCountRepository(Protocol):
         export_n: int = 0,
         min_norm_len: int = 0,
         max_norm_len: int = 0,
-        source: str = "auto",
         dataset_id: str | None = None,
     ) -> Iterable[NgramCount]:
-        raise NotImplementedError
-
-    def count_entries(self, *, lang: str, corpus: str) -> int:
-        raise NotImplementedError
-
-    def compact_counts(self, *, lang: str, corpus: str, n: int) -> int:
         raise NotImplementedError
 
     def delete_counts(self, *, lang: str, corpus: str) -> dict[str, int]:

@@ -16,7 +16,10 @@
 - [ADR 0008](0008-direct-source-corpus-adapters.md): manifest-aware direct
   Wikisource and CorpusNOS extraction without persisted tagging.
 - [ADR 0009](0009-text-only-ngram-schema-v3.md): text-only n-gram persistence,
-  `has_punctuation` and explicit legacy migration.
+  `has_punctuation` and explicit legacy migration (superseded).
+- [ADR 0010](0010-generation-only-schema-v4-and-opt-in-filters.md):
+  generation-only schema v4, v3 cleanup migration and opt-in extraction
+  filters.
 
 These records describe accepted behavior or mark the decision that superseded
 it. Proposed replacements or migrations belong in

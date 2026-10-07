@@ -21,9 +21,9 @@ Cuando un alias contiene varias políticas, use los IDs mostrados por
 ```
 
 También admite `--src-n`, `--tgt-n`, límites de longitud normalizada,
-`--max-results`, palíndromos e idénticos. Para datos v2, `auto` y `compact`
-leen la generación activa; `raw` falla porque staging se elimina tras una
-finalización válida. La salida TSV se escribe de forma incremental.
+`--max-results`, palíndromos e idénticos. Lee exclusivamente la generación
+activa; el staging nunca es una fuente de búsqueda. La salida TSV se escribe
+de forma incremental.
 
 ## Identidad y combinación de TSV
 
@@ -40,8 +40,7 @@ mantiene además la grafía mostrada en `source_text` y `target_text`.
 Los recuentos, puntuación y `dataset_id` no intervienen en los IDs. Por ello,
 una extracción nueva del mismo alias de corpus conserva los IDs comparables,
 aunque cambien las muestras o frecuencias. `source_dataset_id` y
-`target_dataset_id` registran la extracción exacta en bases generacionales;
-quedan vacíos para tablas legacy.
+`target_dataset_id` registran la extracción exacta.
 
 Se pueden ejecutar manualmente distintas combinaciones de corpus y concatenar
 los TSV conservando una sola cabecera. Filtre o elimine duplicados exactos por

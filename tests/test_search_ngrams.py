@@ -1,10 +1,11 @@
 import csv
-from collections import Counter
 from dataclasses import replace
 
 import duckdb
 import pytest
 
+from semordnilap.ngrams.application import count_corpus
+from semordnilap.ngrams.cli.extract import build_argparser, command_from_args
 from semordnilap.ngrams.infrastructure import DuckDbNgramCountRepository
 from semordnilap.scoring import score_semordnilap_pair
 from semordnilap.search.application import FindSemordnilapsCommand, run_search
@@ -12,32 +13,47 @@ from semordnilap.search.domain import SearchPolicy, SemordnilapPair
 from semordnilap.search.infrastructure import DuckDbSemordnilapSearchRepository
 
 
-def add_counts(db_path, *, lang, corpus, counts):
-    repository = DuckDbNgramCountRepository(db_path)
-    repository.add_counts(
-        Counter(counts),
-        lang=lang,
-        corpus=corpus,
-        fold_nasal_letters=False,
+def extract(db_path, path, *, lang, corpus, text):
+    path.write_text(text, encoding="utf-8")
+    args = build_argparser().parse_args(
+        [
+            "extract",
+            "--input",
+            str(path),
+            "--format",
+            "txt",
+            "--lang",
+            lang,
+            "--corpus",
+            corpus,
+        ]
     )
+    repository = DuckDbNgramCountRepository(db_path)
+    count_corpus(command_from_args(args), repository)
     repository.close()
 
 
-def test_search_ngrams_finds_reversed_norm_key_pairs(tmp_path):
+def build_pair_db(tmp_path):
     db_path = tmp_path / "ngrams.duckdb"
-    add_counts(
+    extract(
         db_path,
+        tmp_path / "source.txt",
         lang="es",
         corpus="wiki",
-        counts={("roda",): 5, ("casa",): 10},
+        text="roda roda roda roda roda\n",
     )
-    add_counts(
+    extract(
         db_path,
+        tmp_path / "target.txt",
         lang="pt",
         corpus="wiki",
-        counts={("a", "dor"): 7, ("mesa",): 8},
+        text="a dor. a dor. a dor. a dor\n",
     )
+    return db_path
 
+
+def test_search_finds_reversed_final_generation_pairs(tmp_path):
+    db_path = build_pair_db(tmp_path)
     repository = DuckDbSemordnilapSearchRepository(db_path)
     pairs = list(
         repository.iter_pairs(
@@ -48,25 +64,39 @@ def test_search_ngrams_finds_reversed_norm_key_pairs(tmp_path):
                 target_corpus="wiki",
                 min_source_count=1,
                 min_target_count=1,
+                source_n=1,
+                target_n=2,
+                min_norm_len=4,
+                max_norm_len=4,
             )
         )
     )
     repository.close()
+    assert [(pair.source_text, pair.target_text) for pair in pairs] == [
+        ("roda", "a dor")
+    ]
+    assert pairs[0].source_count == 5
+    assert pairs[0].target_count == 4
+    assert pairs[0].source_dataset_id
+    assert pairs[0].target_dataset_id
 
-    assert len(pairs) == 1
-    assert pairs[0].source_text == "roda"
-    assert pairs[0].source_norm_key == "roda"
-    assert pairs[0].target_text == "a dor"
-    assert pairs[0].target_norm_key == "ador"
-    assert pairs[0].source_has_punctuation is False
-    assert pairs[0].target_has_punctuation is False
 
-
-def test_search_ngrams_exposes_punctuation_for_each_side(tmp_path):
+def test_search_exposes_punctuation_for_each_side(tmp_path):
     db_path = tmp_path / "ngrams.duckdb"
-    add_counts(db_path, lang="es", corpus="wiki", counts={("roda,",): 5})
-    add_counts(db_path, lang="pt", corpus="wiki", counts={("a", "dor"): 7})
-
+    extract(
+        db_path,
+        tmp_path / "source.txt",
+        lang="es",
+        corpus="wiki",
+        text="ro, da\n",
+    )
+    extract(
+        db_path,
+        tmp_path / "target.txt",
+        lang="pt",
+        corpus="wiki",
+        text="ador\n",
+    )
     repository = DuckDbSemordnilapSearchRepository(db_path)
     pairs = list(
         repository.iter_pairs(
@@ -77,106 +107,28 @@ def test_search_ngrams_exposes_punctuation_for_each_side(tmp_path):
                 target_corpus="wiki",
                 min_source_count=1,
                 min_target_count=1,
+                source_n=2,
+                target_n=1,
             )
         )
     )
     repository.close()
-
-    assert len(pairs) == 1
-    assert pairs[0].source_text == "roda,"
     assert pairs[0].source_has_punctuation is True
     assert pairs[0].target_has_punctuation is False
 
 
-def test_search_ngrams_supports_legacy_tables_without_punctuation_column(
-    tmp_path,
-):
+def test_search_rejects_database_without_generation_schema(tmp_path):
     db_path = tmp_path / "legacy.duckdb"
     connection = duckdb.connect(str(db_path))
-    for table in ("ngram_counts", "ngram_totals"):
-        connection.execute(
-            f"""
-            CREATE TABLE {table} (
-                lang TEXT,
-                corpus TEXT,
-                text TEXT,
-                n INTEGER,
-                count BIGINT,
-                norm_key TEXT
-            )
-            """
-        )
-    connection.execute(
-        """
-        CREATE TABLE ngram_compactions (
-            lang TEXT,
-            corpus TEXT,
-            n INTEGER,
-            compacted_at TIMESTAMP
-        )
-        """
-    )
-    connection.execute(
-        """
-        INSERT INTO ngram_counts VALUES
-            ('es', 'wiki', 'roda', 1, 5, 'roda'),
-            ('pt', 'wiki', 'a dor', 2, 7, 'ador')
-        """
-    )
+    connection.execute("CREATE TABLE ngram_counts(value INTEGER)")
     connection.close()
-
-    repository = DuckDbSemordnilapSearchRepository(db_path)
-    pairs = list(
-        repository.iter_pairs(
-            SearchPolicy(
-                source_lang="es",
-                target_lang="pt",
-                source_corpus="wiki",
-                target_corpus="wiki",
-                min_source_count=1,
-                min_target_count=1,
-            )
-        )
-    )
-    repository.close()
-
-    assert len(pairs) == 1
-    assert pairs[0].source_has_punctuation is False
-    assert pairs[0].target_has_punctuation is False
+    with pytest.raises(RuntimeError, match="generation-based"):
+        DuckDbSemordnilapSearchRepository(db_path)
 
 
-def test_search_ngrams_aggregates_partial_counts(tmp_path):
-    db_path = tmp_path / "ngrams.duckdb"
-    add_counts(db_path, lang="es", corpus="wiki", counts={("roda",): 2})
-    add_counts(db_path, lang="es", corpus="wiki", counts={("roda",): 3})
-    add_counts(db_path, lang="pt", corpus="wiki", counts={("a", "dor"): 4})
-
-    repository = DuckDbSemordnilapSearchRepository(db_path)
-    pairs = list(
-        repository.iter_pairs(
-            SearchPolicy(
-                source_lang="es",
-                target_lang="pt",
-                source_corpus="wiki",
-                target_corpus="wiki",
-                min_source_count=5,
-                min_target_count=4,
-            )
-        )
-    )
-    repository.close()
-
-    assert len(pairs) == 1
-    assert pairs[0].source_count == 5
-    assert pairs[0].target_count == 4
-
-
-def test_search_ngrams_exports_tsv(tmp_path):
-    db_path = tmp_path / "ngrams.duckdb"
+def test_search_exports_tsv_with_dataset_ids(tmp_path):
+    db_path = build_pair_db(tmp_path)
     out_path = tmp_path / "pairs.tsv"
-    add_counts(db_path, lang="es", corpus="wiki", counts={("roda",): 5})
-    add_counts(db_path, lang="pt", corpus="wiki", counts={("a", "dor"): 4})
-
     command = FindSemordnilapsCommand(
         db_path=db_path,
         output_path=out_path,
@@ -187,24 +139,18 @@ def test_search_ngrams_exports_tsv(tmp_path):
             target_corpus="wiki",
             min_source_count=1,
             min_target_count=1,
+            source_n=1,
+            target_n=2,
         ),
     )
-    repository = DuckDbSemordnilapSearchRepository(db_path)
-
-    exported = run_search(command, repository)
-
+    exported = run_search(
+        command, DuckDbSemordnilapSearchRepository(db_path)
+    )
     with out_path.open("r", encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f, delimiter="\t"))
-
     assert exported == 1
-    assert rows[0]["pair_id"].startswith("semordnilap-pair-v1:")
-    assert rows[0]["lexical_pair_id"].startswith(
-        "semordnilap-lexical-pair-v1:"
-    )
-    assert rows[0]["source_dataset_id"] == ""
-    assert rows[0]["target_dataset_id"] == ""
-    assert rows[0]["source_text"] == "roda"
-    assert rows[0]["target_text"] == "a dor"
+    assert rows[0]["source_dataset_id"]
+    assert rows[0]["target_dataset_id"]
     assert float(rows[0]["pair_score"]) == score_semordnilap_pair(5, 4)
 
 
@@ -236,7 +182,6 @@ def test_pair_ids_are_stable_across_case_counts_and_extractions():
         source_dataset_id="dataset:new-source",
         target_dataset_id="dataset:new-target",
     )
-
     assert new_extract.pair_id == pair.pair_id
     assert new_extract.lexical_pair_id == pair.lexical_pair_id
     assert pair.pair_id == (
@@ -267,7 +212,6 @@ def test_pair_id_tracks_corpus_but_lexical_pair_id_does_not():
         target_has_punctuation=False,
     )
     other_corpus = replace(pair, target_corpus="corpusnos")
-
     assert other_corpus.pair_id != pair.pair_id
     assert other_corpus.lexical_pair_id == pair.lexical_pair_id
 
@@ -289,76 +233,5 @@ def test_pair_ids_preserve_accents_and_punctuation():
         target_norm_key="ador",
         target_has_punctuation=True,
     )
-
     assert replace(pair, target_text="a dor,").pair_id != pair.pair_id
     assert replace(pair, target_text="á dor").pair_id != pair.pair_id
-
-
-def test_search_ngrams_can_use_compacted_counts_and_filters(tmp_path):
-    db_path = tmp_path / "ngrams.duckdb"
-    add_counts(
-        db_path,
-        lang="es",
-        corpus="wiki",
-        counts={("roda",): 5, ("la", "casa"): 10},
-    )
-    add_counts(
-        db_path,
-        lang="pt",
-        corpus="wiki",
-        counts={("a", "dor"): 7, ("mesa",): 8},
-    )
-
-    counts_repository = DuckDbNgramCountRepository(db_path)
-    counts_repository.compact_counts(lang="es", corpus="wiki", n=1)
-    counts_repository.compact_counts(lang="pt", corpus="wiki", n=2)
-    counts_repository.close()
-
-    repository = DuckDbSemordnilapSearchRepository(db_path)
-    pairs = list(
-        repository.iter_pairs(
-            SearchPolicy(
-                source_lang="es",
-                target_lang="pt",
-                source_corpus="wiki",
-                target_corpus="wiki",
-                min_source_count=1,
-                min_target_count=1,
-                source_n=1,
-                target_n=2,
-                min_norm_len=4,
-                max_norm_len=4,
-                counts_source="compact",
-            )
-        )
-    )
-    repository.close()
-
-    assert len(pairs) == 1
-    assert pairs[0].source_text == "roda"
-    assert pairs[0].target_text == "a dor"
-
-
-def test_search_ngrams_reports_missing_compaction(tmp_path):
-    db_path = tmp_path / "ngrams.duckdb"
-    add_counts(db_path, lang="es", corpus="wiki", counts={("roda",): 5})
-    add_counts(db_path, lang="pt", corpus="wiki", counts={("a", "dor"): 7})
-
-    counts_repository = DuckDbNgramCountRepository(db_path)
-    counts_repository.compact_counts(lang="es", corpus="wiki", n=1)
-    counts_repository.close()
-
-    repository = DuckDbSemordnilapSearchRepository(db_path)
-    with pytest.raises(RuntimeError, match="No compacted target counts"):
-        list(
-            repository.iter_pairs(
-                SearchPolicy(
-                    source_lang="es",
-                    target_lang="pt",
-                    source_corpus="wiki",
-                    target_corpus="wiki",
-                    counts_source="compact",
-                )
-            )
-        )
-    repository.close()

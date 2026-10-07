@@ -9,10 +9,10 @@ from semordnilap.utils.text import normalize_compact_text
 NORMALIZATION_VERSION = "unicode-nfc-casefold-v2"
 
 
-def normalize_ngram(text: str, *, fold_nasal_letters: bool = False) -> str:
+def normalize_ngram(text: str, *, preserve_nasal_letters: bool = False) -> str:
     """Build the letters-only compact semordnilap comparison key."""
     normalized = normalize_compact_text(
-        text, fold_nasal_letters=fold_nasal_letters
+        text, preserve_nasal_letters=preserve_nasal_letters
     )
     return "".join(
         char

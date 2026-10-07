@@ -22,7 +22,6 @@ class SearchPolicy:
     target_n: int = 0
     min_norm_len: int = 0
     max_norm_len: int = 0
-    counts_source: str = "auto"
     include_palindromes: bool = False
     include_identical_text: bool = False
     source_dataset_id: str | None = None

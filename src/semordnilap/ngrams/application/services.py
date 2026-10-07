@@ -12,7 +12,6 @@ from tqdm import tqdm
 
 from semordnilap.ngrams.application.commands import ExtractNgramsCommand
 from semordnilap.ngrams.domain import (
-    NgramKey,
     NgramCountRepository,
     iter_ngrams_from_text,
 )
@@ -31,27 +30,6 @@ from semordnilap.utils.artifacts import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def flush_counts(
-    repository: NgramCountRepository,
-    counts: Counter[NgramKey],
-    command: ExtractNgramsCommand,
-) -> None:
-    if not counts:
-        return
-    logger.info(
-        "Flushing %d unique n-grams after %d pending occurrences",
-        len(counts),
-        counts.total(),
-    )
-    repository.add_counts(
-        counts,
-        lang=command.policy.lang,
-        corpus=command.corpus,
-        fold_nasal_letters=command.policy.fold_nasal_letters,
-    )
-    counts.clear()
 
 
 def count_corpus(
@@ -164,7 +142,7 @@ def count_corpus(
                 counts=pending,
                 lang=command.policy.lang,
                 corpus=command.corpus,
-                fold_nasal_letters=command.policy.fold_nasal_letters,
+                preserve_nasal_letters=command.policy.preserve_nasal_letters,
             )
             if inserted:
                 committed_chunks += 1
@@ -190,12 +168,9 @@ def count_corpus(
 def export_tsv(
     command: ExtractNgramsCommand,
     repository: NgramCountRepository,
-    *,
-    source: str | None = None,
 ) -> int:
     command.output_path.parent.mkdir(parents=True, exist_ok=True)
     started_at = perf_counter()
-    export_source = source or command.export_source
     rows = repository.iter_counts(
         lang=command.policy.lang,
         corpus=command.corpus,
@@ -204,7 +179,6 @@ def export_tsv(
         export_n=command.export_n,
         min_norm_len=command.min_export_norm_len,
         max_norm_len=command.max_export_norm_len,
-        source=export_source,
         dataset_id=command.dataset_id,
     )
 
@@ -273,86 +247,6 @@ def export_tsv(
     return exported
 
 
-def compact_counts(
-    command: ExtractNgramsCommand, repository: NgramCountRepository
-) -> int:
-    logger.info(
-        "Compacting counts for lang=%s corpus=%s n=%d",
-        command.policy.lang,
-        command.corpus,
-        command.compact_n,
-    )
-    return repository.compact_counts(
-        lang=command.policy.lang,
-        corpus=command.corpus,
-        n=command.compact_n,
-    )
-
-
-def compact_one(
-    command: ExtractNgramsCommand,
-    repository: NgramCountRepository,
-    *,
-    n: int,
-    step: int,
-    total_steps: int,
-) -> int:
-    logger.info(
-        "Compaction step %d/%d started: lang=%s corpus=%s n=%d",
-        step,
-        total_steps,
-        command.policy.lang,
-        command.corpus,
-        n,
-    )
-    started_at = perf_counter()
-    compacted = repository.compact_counts(
-        lang=command.policy.lang,
-        corpus=command.corpus,
-        n=n,
-    )
-    logger.info(
-        "Compaction step %d/%d finished: lang=%s corpus=%s n=%d rows=%d "
-        "elapsed=%.2fs",
-        step,
-        total_steps,
-        command.policy.lang,
-        command.corpus,
-        n,
-        compacted,
-        perf_counter() - started_at,
-    )
-    return compacted
-
-
-def compact_all_counts(
-    command: ExtractNgramsCommand, repository: NgramCountRepository
-) -> int:
-    total = 0
-    n_values = list(range(1, command.policy.max_n + 1))
-    logger.info(
-        "Starting progressive compaction for lang=%s corpus=%s n_values=%s",
-        command.policy.lang,
-        command.corpus,
-        ",".join(str(n) for n in n_values),
-    )
-    for step, n in enumerate(n_values, 1):
-        total += compact_one(
-            command,
-            repository,
-            n=n,
-            step=step,
-            total_steps=len(n_values),
-        )
-    logger.info(
-        "Finished progressive compaction for lang=%s corpus=%s: %d rows",
-        command.policy.lang,
-        command.corpus,
-        total,
-    )
-    return total
-
-
 def delete_counts(
     command: ExtractNgramsCommand, repository: NgramCountRepository
 ) -> int:
@@ -376,11 +270,6 @@ def run_extraction(
     try:
         if command.delete_only:
             return delete_counts(command, repository)
-        if command.compact_only:
-            if command.compact_n:
-                return compact_counts(command, repository)
-            return compact_all_counts(command, repository)
-        export_source_override = None
         if command.export_only:
             logger.info(
                 "Export-only mode: using existing DuckDB counts for "
@@ -389,18 +278,14 @@ def run_extraction(
                 command.corpus,
             )
         else:
-            compacted = count_corpus(command, repository)
+            final_rows = count_corpus(command, repository)
             if not command.export_after_count:
                 logger.info(
                     "Skipping TSV export after extraction for lang=%s corpus=%s",
                     command.policy.lang,
                     command.corpus,
                 )
-                return compacted
-        return export_tsv(
-            command,
-            repository,
-            source=export_source_override,
-        )
+                return final_rows
+        return export_tsv(command, repository)
     finally:
         repository.close()

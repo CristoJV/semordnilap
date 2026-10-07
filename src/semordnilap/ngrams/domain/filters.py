@@ -182,8 +182,8 @@ def is_valid_ngram(
     min_token_len: int,
     max_token_len: int,
     min_norm_len: int,
-    include_all_stopword_ngrams: bool,
-    fold_nasal_letters: bool,
+    filter_all_stopword_ngrams: bool,
+    preserve_nasal_letters: bool,
 ) -> bool:
     if not tokens:
         return False
@@ -196,10 +196,10 @@ def is_valid_ngram(
         ):
             return False
     norm_key = normalize_ngram(
-        " ".join(tokens), fold_nasal_letters=fold_nasal_letters
+        " ".join(tokens), preserve_nasal_letters=preserve_nasal_letters
     )
     if len(norm_key) < min_norm_len:
         return False
-    if not include_all_stopword_ngrams and is_all_stopwords(tokens, lang):
+    if filter_all_stopword_ngrams and is_all_stopwords(tokens, lang):
         return False
     return True
