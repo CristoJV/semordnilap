@@ -23,6 +23,8 @@ CURRENT_SCHEMA_VERSION = 3
 RAW_COUNTS_TABLE = "ngram_counts"
 TOTAL_COUNTS_TABLE = "ngram_totals"
 V2_FINAL_TABLE = "ngram_final_v2"
+FINALIZATION_PARTS_TABLE = "ngram_finalization_parts"
+DEFAULT_FINALIZATION_BUCKETS = 8
 REMOVED_UPOS_TABLES = (
     "ngram_upos_counts",
     "ngram_upos_totals",
@@ -298,6 +300,7 @@ class DuckDbNgramCountRepository:
             for table in (
                 "ngram_stage_v2",
                 V2_FINAL_TABLE,
+                FINALIZATION_PARTS_TABLE,
                 "extraction_chunks",
             ):
                 self._con.execute(
@@ -442,7 +445,8 @@ class DuckDbNgramCountRepository:
     ) -> int:
         dataset = self._con.execute(
             """
-            SELECT status, active_generation
+            SELECT status, active_generation,
+                   CAST(json_extract_string(policy_json, '$.max_n') AS INTEGER)
             FROM extraction_datasets WHERE dataset_id = ?
             """,
             [dataset_id],
@@ -450,28 +454,98 @@ class DuckDbNgramCountRepository:
         if not dataset:
             raise ValueError(f"Unknown extraction dataset: {dataset_id}")
         if dataset[0] == "complete":
+            if not retain_staging:
+                self._cleanup_finalized_staging(dataset_id)
             return self._count_v2_final_rows(dataset_id)
         generation = int(dataset[1] or 0) + 1
-        self._con.execute("BEGIN TRANSACTION")
-        try:
-            self._con.execute(
-                f"DELETE FROM {V2_FINAL_TABLE} WHERE dataset_id = ?",
-                [dataset_id],
-            )
-            self._con.execute(
+        max_n = int(dataset[2] or 1)
+        bucket_count = self._finalization_bucket_count(
+            dataset_id=dataset_id,
+            generation=generation,
+        )
+        completed = {
+            (row[0], row[1])
+            for row in self._con.execute(
                 f"""
-                INSERT INTO {V2_FINAL_TABLE}
-                SELECT dataset_id, ?, surface_key,
-                       arg_min(surface_display, chunk_id), n, SUM(count),
-                       any_value(norm_key), bool_or(has_punctuation)
-                FROM ngram_stage_v2
-                WHERE dataset_id = ?
-                GROUP BY dataset_id, surface_key, n
+                SELECT n, bucket
+                FROM {FINALIZATION_PARTS_TABLE}
+                WHERE dataset_id = ? AND generation = ?
+                  AND bucket_count = ?
                 """,
-                [generation, dataset_id],
-            )
+                [dataset_id, generation, bucket_count],
+            ).fetchall()
+        }
+        total_parts = max_n * bucket_count
+        logger.info(
+            "Finalizing dataset %s progressively: generation=%d n=1..%d "
+            "buckets=%d completed_parts=%d/%d",
+            dataset_id,
+            generation,
+            max_n,
+            bucket_count,
+            len(completed),
+            total_parts,
+        )
+
+        current_threads, preserve_order = self._con.execute(
+            """
+            SELECT current_setting('threads'),
+                   current_setting('preserve_insertion_order')
+            """
+        ).fetchone()
+        finalization_threads = min(int(current_threads), 2)
+        try:
+            self._con.execute(f"SET threads = {finalization_threads}")
+            self._con.execute("SET preserve_insertion_order = false")
+            step = 0
+            for n in range(1, max_n + 1):
+                for bucket in range(bucket_count):
+                    step += 1
+                    if (n, bucket) in completed:
+                        logger.info(
+                            "Finalization part %d/%d already committed: "
+                            "n=%d bucket=%d/%d",
+                            step,
+                            total_parts,
+                            n,
+                            bucket + 1,
+                            bucket_count,
+                        )
+                        continue
+                    self._finalize_extraction_part(
+                        dataset_id=dataset_id,
+                        generation=generation,
+                        n=n,
+                        bucket=bucket,
+                        bucket_count=bucket_count,
+                        step=step,
+                        total_parts=total_parts,
+                    )
             self._fault("finalize.after_final_counts")
             self._fault("finalize.after_validation")
+        finally:
+            self._con.execute(f"SET threads = {int(current_threads)}")
+            self._con.execute(
+                "SET preserve_insertion_order = "
+                + ("true" if preserve_order else "false")
+            )
+
+        self._con.execute("BEGIN TRANSACTION")
+        try:
+            completed_parts = self._con.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM {FINALIZATION_PARTS_TABLE}
+                WHERE dataset_id = ? AND generation = ?
+                  AND bucket_count = ?
+                """,
+                [dataset_id, generation, bucket_count],
+            ).fetchone()[0]
+            if completed_parts != total_parts:
+                raise RuntimeError(
+                    f"Finalization is incomplete for {dataset_id}: "
+                    f"{completed_parts}/{total_parts} parts"
+                )
             self._con.execute(
                 """
                 UPDATE extraction_datasets
@@ -489,17 +563,147 @@ class DuckDbNgramCountRepository:
                 """,
                 [run_id],
             )
-            if not retain_staging:
-                self._con.execute(
-                    "DELETE FROM ngram_stage_v2 WHERE dataset_id = ?",
-                    [dataset_id],
-                )
             self._fault("finalize.before_transaction_commit")
             self._con.execute("COMMIT")
         except Exception:
             self._con.execute("ROLLBACK")
             raise
+        if not retain_staging:
+            self._cleanup_finalized_staging(dataset_id)
         return self._count_v2_final_rows(dataset_id)
+
+    def _cleanup_finalized_staging(self, dataset_id: str) -> None:
+        self._con.execute("BEGIN TRANSACTION")
+        try:
+            self._con.execute(
+                "DELETE FROM ngram_stage_v2 WHERE dataset_id = ?",
+                [dataset_id],
+            )
+            self._con.execute(
+                f"""
+                DELETE FROM {FINALIZATION_PARTS_TABLE}
+                WHERE dataset_id = ?
+                """,
+                [dataset_id],
+            )
+            self._con.execute("COMMIT")
+        except Exception:
+            self._con.execute("ROLLBACK")
+            raise
+
+    def _finalization_bucket_count(
+        self, *, dataset_id: str, generation: int
+    ) -> int:
+        row = self._con.execute(
+            f"""
+            SELECT MIN(bucket_count), MAX(bucket_count)
+            FROM {FINALIZATION_PARTS_TABLE}
+            WHERE dataset_id = ? AND generation = ?
+            """,
+            [dataset_id, generation],
+        ).fetchone()
+        if row and row[0] is not None:
+            if row[0] != row[1]:
+                raise RuntimeError(
+                    f"Inconsistent finalization partitions for {dataset_id}"
+                )
+            return int(row[0])
+        return DEFAULT_FINALIZATION_BUCKETS
+
+    def _finalize_extraction_part(
+        self,
+        *,
+        dataset_id: str,
+        generation: int,
+        n: int,
+        bucket: int,
+        bucket_count: int,
+        step: int,
+        total_parts: int,
+    ) -> None:
+        logger.info(
+            "Finalization part %d/%d started: n=%d bucket=%d/%d",
+            step,
+            total_parts,
+            n,
+            bucket + 1,
+            bucket_count,
+        )
+        started_at = perf_counter()
+        self._con.execute("BEGIN TRANSACTION")
+        try:
+            self._con.execute(
+                f"""
+                DELETE FROM {V2_FINAL_TABLE}
+                WHERE dataset_id = ? AND generation = ? AND n = ?
+                  AND hash(surface_key) % ? = ?
+                """,
+                [dataset_id, generation, n, bucket_count, bucket],
+            )
+            rows = self._con.execute(
+                f"""
+                INSERT INTO {V2_FINAL_TABLE}
+                SELECT dataset_id, ?, surface_key,
+                       arg_min(surface_display, chunk_id), n, SUM(count),
+                       any_value(norm_key), bool_or(has_punctuation)
+                FROM ngram_stage_v2
+                WHERE dataset_id = ? AND n = ?
+                  AND hash(surface_key) % ? = ?
+                GROUP BY dataset_id, surface_key, n
+                """,
+                [generation, dataset_id, n, bucket_count, bucket],
+            ).fetchone()[0]
+            self._fault("finalize.after_part_counts")
+            self._con.execute(
+                f"""
+                INSERT INTO {FINALIZATION_PARTS_TABLE}
+                VALUES (?, ?, ?, ?, ?, current_timestamp)
+                """,
+                [dataset_id, generation, n, bucket, bucket_count],
+            )
+            self._con.execute("COMMIT")
+        except Exception:
+            self._con.execute("ROLLBACK")
+            raise
+        logger.info(
+            "Finalization part %d/%d committed: n=%d bucket=%d/%d "
+            "rows=%d elapsed=%.2fs",
+            step,
+            total_parts,
+            n,
+            bucket + 1,
+            bucket_count,
+            rows,
+            perf_counter() - started_at,
+        )
+
+    def resume_finalization(
+        self, *, lang: str, corpus: str, dataset_id: str | None = None
+    ) -> int:
+        rows = self._con.execute(
+            """
+            SELECT d.dataset_id, r.run_id
+            FROM extraction_datasets d
+            JOIN extraction_runs r USING (dataset_id)
+            WHERE d.lang = ? AND d.corpus = ?
+              AND (? IS NULL OR d.dataset_id = ?)
+            ORDER BY d.created_at
+            """,
+            [lang, corpus, dataset_id, dataset_id],
+        ).fetchall()
+        if not rows:
+            raise ValueError(
+                f"No extraction dataset found for {lang}/{corpus}"
+            )
+        if len(rows) > 1:
+            raise ValueError(
+                f"Multiple policy identities exist for {lang}/{corpus}; "
+                "select --dataset-id explicitly"
+            )
+        return self.finalize_extraction(
+            dataset_id=rows[0][0],
+            run_id=rows[0][1],
+        )
 
     def _count_v2_final_rows(self, dataset_id: str) -> int:
         return int(
@@ -582,6 +786,19 @@ class DuckDbNgramCountRepository:
                 count BIGINT NOT NULL,
                 norm_key TEXT NOT NULL,
                 has_punctuation BOOLEAN NOT NULL
+            )
+            """
+        )
+        self._con.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {FINALIZATION_PARTS_TABLE} (
+                dataset_id TEXT NOT NULL,
+                generation INTEGER NOT NULL,
+                n INTEGER NOT NULL,
+                bucket INTEGER NOT NULL,
+                bucket_count INTEGER NOT NULL,
+                completed_at TIMESTAMP NOT NULL,
+                PRIMARY KEY(dataset_id, generation, n, bucket)
             )
             """
         )
@@ -1159,6 +1376,8 @@ class DuckDbNgramCountRepository:
         generation_collections = []
         all_v2_datasets = []
         generation_by_n = []
+        extraction_runs = []
+        finalization_parts = []
         if self._has_generation_schema:
             v2_datasets = self._con.execute(
                 """
@@ -1214,6 +1433,35 @@ class DuckDbNgramCountRepository:
                 """,
                 [lang, lang, corpus, corpus],
             ).fetchall()
+            extraction_runs = self._con.execute(
+                """
+                SELECT d.dataset_id, d.lang, d.corpus, r.status,
+                       r.completed_documents, r.generated_occurrences,
+                       r.committed_chunks, r.updated_at
+                FROM extraction_datasets d
+                JOIN extraction_runs r USING (dataset_id)
+                WHERE (? IS NULL OR d.lang = ?)
+                  AND (? IS NULL OR d.corpus = ?)
+                ORDER BY d.created_at
+                """,
+                [lang, lang, corpus, corpus],
+            ).fetchall()
+            if self._table_exists(FINALIZATION_PARTS_TABLE):
+                finalization_parts = self._con.execute(
+                    f"""
+                    SELECT p.dataset_id, p.generation, p.n,
+                           COUNT(*) AS completed_buckets,
+                           MAX(p.bucket_count) AS bucket_count,
+                           MAX(p.completed_at) AS updated_at
+                    FROM {FINALIZATION_PARTS_TABLE} p
+                    JOIN extraction_datasets d USING (dataset_id)
+                    WHERE (? IS NULL OR d.lang = ?)
+                      AND (? IS NULL OR d.corpus = ?)
+                    GROUP BY p.dataset_id, p.generation, p.n
+                    ORDER BY p.dataset_id, p.generation, p.n
+                    """,
+                    [lang, lang, corpus, corpus],
+                ).fetchall()
 
         by_n = self._con.execute(
             f"""
@@ -1326,6 +1574,8 @@ class DuckDbNgramCountRepository:
             "generation_collections": generation_collections,
             "all_v2_datasets": all_v2_datasets,
             "generation_by_n": generation_by_n,
+            "extraction_runs": extraction_runs,
+            "finalization_parts": finalization_parts,
             "table_inventory": table_inventory,
             "by_lang_corpus": by_lang_corpus,
             "by_n": by_n,
@@ -1395,6 +1645,7 @@ class DuckDbNgramCountRepository:
                 for table in (
                     "ngram_stage_v2",
                     V2_FINAL_TABLE,
+                    FINALIZATION_PARTS_TABLE,
                     "extraction_chunks",
                 ):
                     self._con.execute(

@@ -16,9 +16,12 @@ extraction keeps its historical policy identity.
 
 Text counts, the chunk ledger and the run checkpoint are written in one
 DuckDB transaction. Replaying a matching committed chunk is a no-op; reusing
-its ID with different content fails. Final totals are built as a new validated
-generation and become active in the same transaction. Successful finalization
-removes staging unless retention is explicitly requested.
+its ID with different content fails. Final totals are built progressively by
+`n` and hash bucket. Each part is committed with a durable checkpoint using a
+low-memory DuckDB configuration; retries skip completed parts. The generation
+only becomes visible after every part is validated and activated in one final
+transaction. Successful activation removes staging unless retention is
+explicitly requested.
 
 New databases use schema version 3 and store only textual counts plus
 `has_punctuation`. Existing databases require the explicit
@@ -33,7 +36,8 @@ TSV exports use a partial file, checksum manifest and atomic promotion.
 - Retrying extraction cannot duplicate counts.
 - Policy changes and limited samples cannot mix with a complete dataset.
 - Memory is bounded by the streaming token window and configured maximum
-  pending unique n-grams, including within one large document.
+  pending unique n-grams during counting, including within one large document;
+  finalization memory is bounded further by hash partitioning.
 - Final storage does not permanently duplicate staging and aggregate rows.
 - Human aliases remain convenient, but ambiguity is visible rather than
   silently selecting or combining incompatible data.

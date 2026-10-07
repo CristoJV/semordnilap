@@ -28,12 +28,28 @@ logger = logging.getLogger(__name__)
 DEFAULT_DB_PATH = Path("data/ngrams/ngrams.duckdb")
 
 
+class HelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+    """Show meaningful defaults without noisy None/False annotations."""
+
+    def _get_help_string(self, action: argparse.Action) -> str:
+        if (
+            action.required
+            or action.default is None
+            or action.default is False
+        ):
+            return action.help
+        return super()._get_help_string(action)
+
+
+HELP_FORMATTER = HelpFormatter
+
+
 def add_db_path(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--db-path",
         type=Path,
         default=DEFAULT_DB_PATH,
-        help=f"DuckDB database path. Default: {DEFAULT_DB_PATH}",
+        help="DuckDB database that stores checkpoints and final counts.",
     )
 
 
@@ -42,6 +58,7 @@ def add_lang_corpus(
     *,
     lang_required: bool,
     corpus_default: str | None = "default",
+    corpus_required: bool = False,
 ) -> None:
     parser.add_argument(
         "--lang",
@@ -54,7 +71,11 @@ def add_lang_corpus(
     parser.add_argument(
         "--corpus",
         default=corpus_default,
-        help="Corpus identifier stored with each n-gram.",
+        required=corpus_required,
+        help=(
+            "Readable corpus alias. Managed adapters infer it when omitted; "
+            "--corpus overrides the inferred alias."
+        ),
     )
     parser.add_argument(
         "--dataset-id",
@@ -63,10 +84,31 @@ def add_lang_corpus(
 
 
 def add_policy_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--max-n", type=int, default=3)
-    parser.add_argument("--min-token-len", type=int, default=2)
-    parser.add_argument("--max-token-len", type=int, default=30)
-    parser.add_argument("--min-norm-len", type=int, default=3)
+    parser.add_argument(
+        "--max-n",
+        type=int,
+        choices=[1, 2, 3],
+        default=3,
+        help="Largest lexical window to count (1=unigrams, 2=bigrams, 3=trigrams).",
+    )
+    parser.add_argument(
+        "--min-token-len",
+        type=int,
+        default=2,
+        help="Discard lexical tokens shorter than this many characters.",
+    )
+    parser.add_argument(
+        "--max-token-len",
+        type=int,
+        default=30,
+        help="Discard lexical tokens longer than this many characters.",
+    )
+    parser.add_argument(
+        "--min-norm-len",
+        type=int,
+        default=3,
+        help="Discard n-grams whose normalized key is shorter than this.",
+    )
     parser.add_argument(
         "--include-all-stopword-ngrams",
         action="store_true",
@@ -77,30 +119,43 @@ def add_policy_options(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Normalize ñ to n. ç is always normalized to c.",
     )
-    punctuation_group = parser.add_mutually_exclusive_group()
-    punctuation_group.add_argument(
-        "--omit-punctuation",
-        dest="omit_punctuation",
-        action="store_true",
-        default=False,
-        help=("Compatibility mode: treat punctuation as an n-gram boundary."),
+    parser.add_argument(
+        "--punctuation",
+        choices=["keep", "boundary"],
+        default="keep",
+        help=(
+            "keep retains punctuation in the stored surface and permits "
+            "lexical windows to cross it; boundary treats every punctuation "
+            "character as a hard n-gram boundary. Punctuation never counts "
+            "toward n or norm_key."
+        ),
     )
-    punctuation_group.add_argument(
+    # Accept historical spellings without advertising three ways to express
+    # the same policy in the public CLI.
+    parser.add_argument(
+        "--omit-punctuation",
+        dest="punctuation",
+        action="store_const",
+        const="boundary",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--keep-punctuation",
         "--no-omit-punctuation",
-        dest="omit_punctuation",
-        action="store_false",
-        help=(
-            "Allow n-grams to cross punctuation and sentence boundaries "
-            "(default), "
-            "retaining punctuation in text while excluding it from n and "
-            "norm_key. Document boundaries are always preserved."
-        ),
+        dest="punctuation",
+        action="store_const",
+        const="keep",
+        help=argparse.SUPPRESS,
     )
 
 
 def add_counting_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument(
+        "--input",
+        type=Path,
+        required=True,
+        help="Source file, corpus directory, or managed corpus collection.",
+    )
     parser.add_argument(
         "--adapter",
         choices=SOURCE_ADAPTERS,
@@ -115,35 +170,48 @@ def add_counting_options(parser: argparse.ArgumentParser) -> None:
         dest="input_format",
         choices=["auto", "txt", "jsonl"],
         default="auto",
+        help="Raw input format; managed adapters resolve this automatically.",
     )
-    parser.add_argument("--text-field", default="text")
+    parser.add_argument(
+        "--text-field",
+        default="text",
+        help="JSONL field containing document text (raw adapter only).",
+    )
     parser.add_argument(
         "--limit-docs",
         type=int,
         default=0,
-        help="Process only the first N text records. Useful for smoke tests.",
+        help="Process only the first N documents; 0 processes the full corpus.",
     )
+    # Removed from the visible interface because extraction checkpoints each
+    # document and this historical option never controlled that behavior.
     parser.add_argument(
         "--chunk-docs",
         type=int,
         default=1000,
-        help="Flush counts to DuckDB every N documents.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--flush-unique-ngrams",
         type=int,
         default=250_000,
-        help="Flush counts when the pending Counter reaches N unique n-grams.",
+        help=(
+            "Commit a document segment when its in-memory counter reaches "
+            "this many distinct n-grams. This bounds extraction memory."
+        ),
     )
     parser.add_argument(
         "--reset",
         action="store_true",
-        help="Delete existing rows for this lang/corpus before counting.",
+        help=(
+            "Delete and rebuild only the matching immutable dataset identity. "
+            "Without this flag, reruns resume committed checkpoints."
+        ),
     )
     parser.add_argument(
         "--no-compact-after-count",
         action="store_true",
-        help="Do not compact n-gram totals after corpus extraction.",
+        help=argparse.SUPPRESS,
     )
 
 
@@ -194,13 +262,20 @@ def add_export_options(parser: argparse.ArgumentParser) -> None:
 
 def build_argparser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        "Manage corpus n-grams for semordnilap candidate generation"
+        description="Manage corpus n-grams for semordnilap candidate generation.",
+        formatter_class=HELP_FORMATTER,
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     extract_parser = subparsers.add_parser(
         "extract",
-        help="Extract n-gram counts into DuckDB and compact totals.",
+        help="Count a corpus resumably, then finalize an immutable generation.",
+        description=(
+            "Count corpus n-grams into transactional staging checkpoints, "
+            "then consolidate and atomically activate a final generation. "
+            "Rerunning the same command resumes both phases."
+        ),
+        formatter_class=HELP_FORMATTER,
     )
     add_db_path(extract_parser)
     add_lang_corpus(extract_parser, lang_required=True, corpus_default=None)
@@ -210,6 +285,7 @@ def build_argparser() -> argparse.ArgumentParser:
     export_parser = subparsers.add_parser(
         "export",
         help="Export existing n-gram counts from DuckDB to TSV.",
+        formatter_class=HELP_FORMATTER,
     )
     add_db_path(export_parser)
     add_lang_corpus(export_parser, lang_required=True)
@@ -224,6 +300,7 @@ def build_argparser() -> argparse.ArgumentParser:
     db_parser = subparsers.add_parser(
         "db",
         help="Inspect or maintain the DuckDB n-gram store.",
+        formatter_class=HELP_FORMATTER,
     )
     db_subparsers = db_parser.add_subparsers(dest="db_command", required=True)
 
@@ -233,6 +310,7 @@ def build_argparser() -> argparse.ArgumentParser:
             "Inventory DuckDB tables, available collections, datasets and "
             "n-gram counts."
         ),
+        formatter_class=HELP_FORMATTER,
     )
     add_db_path(stats_parser)
     add_lang_corpus(stats_parser, lang_required=False, corpus_default=None)
@@ -245,13 +323,19 @@ def build_argparser() -> argparse.ArgumentParser:
     delete_parser = db_subparsers.add_parser(
         "delete",
         help="Delete all rows for one lang/corpus from the n-gram store.",
+        formatter_class=HELP_FORMATTER,
     )
     add_db_path(delete_parser)
     add_lang_corpus(delete_parser, lang_required=True)
 
     compact_parser = db_subparsers.add_parser(
         "compact",
-        help="Build compacted total counts for one lang/corpus.",
+        help="Build totals for legacy raw-count tables only.",
+        description=(
+            "Compact legacy ngram_counts rows. Modern extraction generations "
+            "are finalized automatically by extract or db finalize."
+        ),
+        formatter_class=HELP_FORMATTER,
     )
     add_db_path(compact_parser)
     add_lang_corpus(compact_parser, lang_required=True)
@@ -266,12 +350,30 @@ def build_argparser() -> argparse.ArgumentParser:
             "progressively."
         ),
     )
+    finalize_parser = db_subparsers.add_parser(
+        "finalize",
+        help="Resume consolidation of an already-counted generation.",
+        description=(
+            "Resume progressive finalization from committed staging rows. "
+            "Use this after an interrupted or out-of-memory finalization; "
+            "the source corpus is not read again."
+        ),
+        formatter_class=HELP_FORMATTER,
+    )
+    add_db_path(finalize_parser)
+    add_lang_corpus(
+        finalize_parser,
+        lang_required=True,
+        corpus_default=None,
+        corpus_required=True,
+    )
     migrate_parser = db_subparsers.add_parser(
         "migrate",
         help=(
             "Migrate DuckDB to text-only schema v3, preserving textual "
             "counts and dropping UPOS tables."
         ),
+        formatter_class=HELP_FORMATTER,
     )
     add_db_path(migrate_parser)
     return parser
@@ -301,8 +403,6 @@ def validate_max_n(args: argparse.Namespace) -> None:
 def validate_counting_args(args: argparse.Namespace) -> None:
     if args.limit_docs < 0:
         raise ValueError("--limit-docs must be 0 or greater")
-    if args.chunk_docs < 1:
-        raise ValueError("--chunk-docs must be at least 1")
     if args.flush_unique_ngrams < 1:
         raise ValueError("--flush-unique-ngrams must be at least 1")
     if not args.corpus or not args.corpus.strip():
@@ -348,7 +448,7 @@ def policy_from_args(args: argparse.Namespace) -> NgramExtractionPolicy:
             args, "include_all_stopword_ngrams", False
         ),
         fold_nasal_letters=getattr(args, "fold_nasal_letters", False),
-        omit_punctuation=getattr(args, "omit_punctuation", False),
+        omit_punctuation=getattr(args, "punctuation", "keep") == "boundary",
     )
 
 
@@ -401,7 +501,6 @@ def command_from_args(args: argparse.Namespace) -> ExtractNgramsCommand:
         export_source=getattr(args, "export_source", "auto"),
         export_log_every=getattr(args, "export_log_every", 10_000),
         limit_docs=getattr(args, "limit_docs", 0),
-        chunk_docs=getattr(args, "chunk_docs", 1000),
         flush_unique_ngrams=getattr(args, "flush_unique_ngrams", 250_000),
         reset=getattr(args, "reset", False),
         export_only=is_export,
@@ -409,10 +508,6 @@ def command_from_args(args: argparse.Namespace) -> ExtractNgramsCommand:
         delete_only=is_delete,
         compact_only=is_compact,
         compact_n=getattr(args, "compact_n", 0),
-        compact_after_count=(
-            args.command == "extract"
-            and not getattr(args, "no_compact_after_count", False)
-        ),
         policy=policy_from_args(args),
         dataset_id=getattr(args, "dataset_id", None),
         source_adapter=getattr(args, "source_adapter", "raw"),
@@ -452,6 +547,7 @@ def log_stats(repository: DuckDbNgramCountRepository, args) -> None:
         "extraction_datasets": "generation dataset registry",
         "extraction_runs": "generation run checkpoints",
         "extraction_chunks": "committed chunk ledger",
+        "ngram_finalization_parts": "resumable finalization checkpoints",
         "ngram_stage_v2": "generation staging counts",
         "ngram_final_v2": "active/final generation counts",
     }
@@ -590,6 +686,33 @@ def log_stats(repository: DuckDbNgramCountRepository, args) -> None:
                 f"sample={sample} status={status} "
                 f"generation={generation}"
             )
+    if stats["extraction_runs"]:
+        lines.append("matching extraction checkpoints:")
+        for (
+            dataset_id,
+            lang,
+            corpus,
+            status,
+            completed_documents,
+            occurrences,
+            chunks,
+            updated_at,
+        ) in stats["extraction_runs"]:
+            lines.append(
+                f"- {lang}/{corpus}: dataset_id={dataset_id} status={status} "
+                f"completed_documents={format_number(completed_documents)} "
+                f"occurrences={format_number(occurrences)} "
+                f"chunks={format_number(chunks)} updated_at={updated_at}"
+            )
+    if stats["finalization_parts"]:
+        lines.append("matching finalization progress:")
+        for dataset_id, generation, n, completed, total, updated_at in stats[
+            "finalization_parts"
+        ]:
+            lines.append(
+                f"- dataset_id={dataset_id} generation={generation} n={n}: "
+                f"parts={completed}/{total} updated_at={updated_at}"
+            )
     raw_by_n = {(row[0], row[1], row[2]): row[3:] for row in stats["by_n"]}
     n_keys = sorted(raw_by_n.keys() | totals_by_n.keys() | compacted_at.keys())
     if n_keys:
@@ -697,6 +820,28 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("Migrated DuckDB schema at %s", args.db_path)
         return 0
 
+    if args.command == "db" and args.db_command == "finalize":
+        normalize_lang(args, required=True)
+        if not args.corpus or not args.corpus.strip():
+            raise ValueError("--corpus is required")
+        with ArtifactLock(args.db_path):
+            repository = DuckDbNgramCountRepository(args.db_path)
+            try:
+                affected = repository.resume_finalization(
+                    lang=args.lang,
+                    corpus=args.corpus.strip(),
+                    dataset_id=args.dataset_id,
+                )
+            finally:
+                repository.close()
+        logger.info(
+            "Finalized %d n-grams for lang=%s corpus=%s",
+            affected,
+            args.lang,
+            args.corpus,
+        )
+        return 0
+
     command = command_from_args(args)
 
     logger.info("Starting sp_ngrams %s", args.command)
@@ -709,11 +854,11 @@ def main(argv: list[str] | None = None) -> int:
         "Options: lang=%s corpus=%s max_n=%d min_count=%d "
         "max_results=%d export_n=%d export_norm_len=%d..%d "
         "export_source=%s export_log_every=%d "
-        "chunk_docs=%d flush_unique_ngrams=%d "
+        "flush_unique_ngrams=%d "
         "adapter=%s "
-        "omit_punctuation=%s "
+        "punctuation=%s "
         "reset=%s export_only=%s export_after_count=%s delete_only=%s "
-        "compact_only=%s compact_n=%d compact_after_count=%s",
+        "compact_only=%s compact_n=%d",
         command.policy.lang,
         command.corpus,
         command.policy.max_n,
@@ -724,17 +869,15 @@ def main(argv: list[str] | None = None) -> int:
         command.max_export_norm_len,
         command.export_source,
         command.export_log_every,
-        command.chunk_docs,
         command.flush_unique_ngrams,
         command.source_adapter,
-        command.policy.omit_punctuation,
+        "boundary" if command.policy.omit_punctuation else "keep",
         command.reset,
         command.export_only,
         command.export_after_count,
         command.delete_only,
         command.compact_only,
         command.compact_n,
-        command.compact_after_count,
     )
 
     if command.export_only:
@@ -771,7 +914,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "extract":
         logger.info(
             "Finished n-gram extraction for lang=%s corpus=%s "
-            "(compacted rows=%d)",
+            "(final rows=%d)",
             command.policy.lang,
             command.corpus,
             affected,

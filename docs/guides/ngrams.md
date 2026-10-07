@@ -9,10 +9,13 @@ dataset etiquetado y no acepta `ud-jsonl`. Cada fila lógica contiene:
 - `norm_key`, usado para la búsqueda normalizada;
 - `has_punctuation`, calculado a partir de la superficie almacenada.
 
-La puntuación y los saltos de frase se pueden cruzar por defecto, pero nunca
-se cruzan documentos. No se conserva un campo independiente de cruce de frase.
-`--omit-punctuation` mantiene el modo compatible que trata la puntuación como
-límite.
+`--punctuation keep` es el valor por defecto: conserva la puntuación en la
+superficie textual y permite que las ventanas léxicas la crucen, pero los
+signos no cuentan para `n` ni forman parte de `norm_key`. Los documentos nunca
+se cruzan. `--punctuation boundary` trata cada signo como un límite duro. Las
+grafías antiguas `--omit-punctuation`, `--keep-punctuation` y
+`--no-omit-punctuation` se aceptan por compatibilidad, pero ya no aparecen en
+la interfaz documentada.
 
 ## Identidad e idempotencia
 
@@ -25,8 +28,30 @@ legible; si corresponde a varias identidades hay que indicar `--dataset-id`.
 La extracción mantiene como máximo el contador configurado con
 `--flush-unique-ngrams`. Cada segmento se confirma junto con su ledger y el
 cursor en una transacción. Repetir un segmento idéntico es un no-op; reutilizar
-su ID con otro digest falla. La finalización agrega y activa una generación
-textual de forma atómica.
+su ID con otro digest falla.
+
+Al terminar de leer el corpus, `extract` siempre finaliza la generación. La
+finalización consolida primero por tamaño `n` y por particiones hash; cada
+parte tiene su propia transacción y checkpoint. Solo cuando todas terminan se
+activa la generación de forma atómica y se elimina el staging. Por eso un
+lector nunca ve una generación parcial y un reintento no repite las partes ya
+confirmadas. Las opciones históricas `--chunk-docs` y
+`--no-compact-after-count` ya no se muestran: la primera no gobernaba los
+checkpoints y la segunda no podía omitir la finalización moderna.
+
+Para diagnosticar y recuperar una interrupción sin volver a leer la fuente:
+
+```bash
+uv run sp_ngrams db stats --db-path data/ngrams/counts.duckdb \
+  --lang gl --corpus corpusnos
+
+uv run sp_ngrams db finalize --db-path data/ngrams/counts.duckdb \
+  --lang gl --corpus corpusnos
+```
+
+`db stats` muestra `completed_documents`, los chunks confirmados y el progreso
+de las partes de finalización. También se puede repetir exactamente el comando
+`extract`: saltará los documentos ya confirmados y retomará la finalización.
 
 ## Adaptadores de corpus fuente
 
@@ -89,6 +114,8 @@ uv run sp_ngrams export --db-path DB --lang es --corpus wiki \
   --dataset-id DATASET_ID --out es.tsv --min-count 5
 
 uv run sp_ngrams db delete --db-path DB --lang es --corpus wiki
+
+uv run sp_ngrams db finalize --db-path DB --lang es --corpus wiki
 ```
 
 `db stats` funciona también como inventario: muestra todas las tablas físicas
@@ -98,6 +125,7 @@ no encuentre datos, conserva el catálogo global y propone usar uno de sus
 aliases exactos. `--verbose` añade las filas raw más frecuentes y todas las
 identidades de generación.
 
-La exportación usa un archivo parcial, checksum y promoción atómica. Las
-tablas legacy `ngram_counts` y `ngram_totals` siguen disponibles para bases
-migradas y para las operaciones directas de compatibilidad.
+`db compact` actúa únicamente sobre las tablas legacy `ngram_counts` y
+`ngram_totals`; no es parte de una extracción moderna. La exportación usa un
+archivo parcial, checksum y promoción atómica. Las tablas legacy siguen
+disponibles para bases migradas y para operaciones directas de compatibilidad.

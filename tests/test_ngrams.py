@@ -49,7 +49,6 @@ def build_options(corpus, output, lang):
         export_source="auto",
         export_log_every=0,
         limit_docs=0,
-        chunk_docs=1000,
         flush_unique_ngrams=250_000,
         reset=False,
         export_only=False,
@@ -57,7 +56,6 @@ def build_options(corpus, output, lang):
         delete_only=False,
         compact_only=False,
         compact_n=0,
-        compact_after_count=True,
         policy=NgramExtractionPolicy(lang=lang, max_n=2),
     )
 
@@ -258,11 +256,10 @@ def test_extract_subcommand_counts_without_exporting():
     assert command.policy.lang == "es"
     assert command.input_path.name == "corpus.jsonl"
     assert command.export_after_count is False
-    assert command.compact_after_count is True
     assert command.policy.omit_punctuation is False
 
 
-def test_extract_subcommand_can_keep_punctuation():
+def test_extract_subcommand_can_set_punctuation_boundary():
     args = build_argparser().parse_args(
         [
             "extract",
@@ -270,13 +267,25 @@ def test_extract_subcommand_can_keep_punctuation():
             "corpus.txt",
             "--lang",
             "es",
-            "--keep-punctuation",
+            "--punctuation",
+            "boundary",
         ]
     )
 
     command = command_from_args(args)
 
-    assert command.policy.omit_punctuation is False
+    assert command.policy.omit_punctuation is True
+
+
+def test_extract_help_explains_defaults_and_hides_obsolete_switches():
+    parser = build_argparser()
+    extract = parser._subparsers._group_actions[0].choices["extract"]
+    rendered = extract.format_help()
+
+    assert "--punctuation {keep,boundary}" in rendered
+    assert "(default: keep)" in rendered
+    assert "--chunk-docs" not in rendered
+    assert "--no-compact-after-count" not in rendered
 
 
 def test_extract_rejects_detected_annotated_input(tmp_path):
@@ -386,7 +395,6 @@ def test_reset_recomputes_lang_corpus_counts(tmp_path):
         export_source=opts.export_source,
         export_log_every=opts.export_log_every,
         limit_docs=opts.limit_docs,
-        chunk_docs=opts.chunk_docs,
         flush_unique_ngrams=opts.flush_unique_ngrams,
         reset=True,
         export_only=opts.export_only,
@@ -394,7 +402,6 @@ def test_reset_recomputes_lang_corpus_counts(tmp_path):
         delete_only=opts.delete_only,
         compact_only=opts.compact_only,
         compact_n=opts.compact_n,
-        compact_after_count=opts.compact_after_count,
         policy=opts.policy,
     )
     reset = collect_counts(reset_opts, db_path)
@@ -453,7 +460,6 @@ def test_export_tsv_respects_max_results(tmp_path):
         export_source="auto",
         export_log_every=0,
         limit_docs=0,
-        chunk_docs=1000,
         flush_unique_ngrams=250_000,
         reset=False,
         export_only=True,
@@ -461,7 +467,6 @@ def test_export_tsv_respects_max_results(tmp_path):
         delete_only=False,
         compact_only=False,
         compact_n=0,
-        compact_after_count=True,
         policy=NgramExtractionPolicy(lang="es", max_n=2),
     )
     exported = export_tsv(opts, repository)
@@ -505,7 +510,6 @@ def test_export_tsv_can_filter_by_n_and_norm_length(tmp_path):
         export_source="auto",
         export_log_every=0,
         limit_docs=0,
-        chunk_docs=1000,
         flush_unique_ngrams=250_000,
         reset=False,
         export_only=True,
@@ -513,7 +517,6 @@ def test_export_tsv_can_filter_by_n_and_norm_length(tmp_path):
         delete_only=False,
         compact_only=False,
         compact_n=0,
-        compact_after_count=True,
         policy=NgramExtractionPolicy(lang="es", max_n=3),
     )
     exported = export_tsv(opts, repository)
@@ -559,7 +562,6 @@ def test_compacted_counts_can_be_used_for_export(tmp_path):
         export_source="auto",
         export_log_every=0,
         limit_docs=0,
-        chunk_docs=1000,
         flush_unique_ngrams=250_000,
         reset=False,
         export_only=True,
@@ -567,7 +569,6 @@ def test_compacted_counts_can_be_used_for_export(tmp_path):
         delete_only=False,
         compact_only=False,
         compact_n=0,
-        compact_after_count=True,
         policy=NgramExtractionPolicy(lang="es", max_n=2),
     )
     exported = export_tsv(opts, repository)
@@ -791,7 +792,6 @@ def test_compact_all_counts_runs_progressively(tmp_path):
         export_source="auto",
         export_log_every=0,
         limit_docs=0,
-        chunk_docs=1000,
         flush_unique_ngrams=250_000,
         reset=False,
         export_only=False,
@@ -799,7 +799,6 @@ def test_compact_all_counts_runs_progressively(tmp_path):
         delete_only=False,
         compact_only=True,
         compact_n=0,
-        compact_after_count=True,
         policy=NgramExtractionPolicy(lang="es", max_n=3),
     )
 

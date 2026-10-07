@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from semordnilap.scoring import score_semordnilap_pair
+from semordnilap.utils.artifacts import stable_id
+from semordnilap.utils.text import canonical_surface
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,44 @@ class SemordnilapPair:
     target_count: int
     target_norm_key: str
     target_has_punctuation: bool
+    source_dataset_id: str | None = None
+    target_dataset_id: str | None = None
+
+    def _identity(self, *, include_corpus: bool) -> dict:
+        """Return the versioned, count-independent identity payload."""
+
+        source = {
+            "lang": self.source_lang.casefold(),
+            "text": canonical_surface(self.source_text),
+            "n": self.source_n,
+        }
+        target = {
+            "lang": self.target_lang.casefold(),
+            "text": canonical_surface(self.target_text),
+            "n": self.target_n,
+        }
+        if include_corpus:
+            source["corpus"] = self.source_corpus
+            target["corpus"] = self.target_corpus
+        return {"source": source, "target": target}
+
+    @property
+    def pair_id(self) -> str:
+        """Identify this directed pair in its source and target corpora."""
+
+        return stable_id(
+            "semordnilap-pair-v1",
+            self._identity(include_corpus=True),
+        )
+
+    @property
+    def lexical_pair_id(self) -> str:
+        """Identify this directed lexical pair independently of corpora."""
+
+        return stable_id(
+            "semordnilap-lexical-pair-v1",
+            self._identity(include_corpus=False),
+        )
 
     @property
     def pair_score(self) -> float:

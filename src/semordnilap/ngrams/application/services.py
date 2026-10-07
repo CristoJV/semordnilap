@@ -390,19 +390,6 @@ def run_extraction(
             )
         else:
             compacted = count_corpus(command, repository)
-            if command.compact_after_count and not getattr(
-                repository, "generation_storage", False
-            ):
-                compacted = compact_all_counts(command, repository)
-                if command.export_source == "auto":
-                    export_source_override = "compact"
-            elif not command.compact_after_count:
-                logger.info(
-                    "Skipping automatic compaction after extraction for "
-                    "lang=%s corpus=%s",
-                    command.policy.lang,
-                    command.corpus,
-                )
             if not command.export_after_count:
                 logger.info(
                     "Skipping TSV export after extraction for lang=%s corpus=%s",

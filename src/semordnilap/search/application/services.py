@@ -18,8 +18,11 @@ def export_pairs_tsv(command: FindSemordnilapsCommand, repository) -> int:
         writer = csv.DictWriter(
             f,
             fieldnames=[
+                "pair_id",
+                "lexical_pair_id",
                 "source_lang",
                 "source_corpus",
+                "source_dataset_id",
                 "source_text",
                 "source_n",
                 "source_count",
@@ -27,6 +30,7 @@ def export_pairs_tsv(command: FindSemordnilapsCommand, repository) -> int:
                 "source_has_punctuation",
                 "target_lang",
                 "target_corpus",
+                "target_dataset_id",
                 "target_text",
                 "target_n",
                 "target_count",
@@ -41,8 +45,11 @@ def export_pairs_tsv(command: FindSemordnilapsCommand, repository) -> int:
         for pair in pairs:
             writer.writerow(
                 {
+                    "pair_id": pair.pair_id,
+                    "lexical_pair_id": pair.lexical_pair_id,
                     "source_lang": pair.source_lang,
                     "source_corpus": pair.source_corpus,
+                    "source_dataset_id": pair.source_dataset_id,
                     "source_text": pair.source_text,
                     "source_n": pair.source_n,
                     "source_count": pair.source_count,
@@ -50,6 +57,7 @@ def export_pairs_tsv(command: FindSemordnilapsCommand, repository) -> int:
                     "source_has_punctuation": pair.source_has_punctuation,
                     "target_lang": pair.target_lang,
                     "target_corpus": pair.target_corpus,
+                    "target_dataset_id": pair.target_dataset_id,
                     "target_text": pair.target_text,
                     "target_n": pair.target_n,
                     "target_count": pair.target_count,

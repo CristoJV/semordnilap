@@ -190,6 +190,8 @@ class DuckDbSemordnilapSearchRepository:
                 target_count=row[11],
                 target_norm_key=row[12],
                 target_has_punctuation=row[13],
+                source_dataset_id=source_v2[0] if source_v2 else None,
+                target_dataset_id=target_v2[0] if target_v2 else None,
             )
 
     def _resolve_v2_dataset(

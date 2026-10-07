@@ -97,7 +97,7 @@ def test_chunk_transaction_rolls_back_and_resume_skips_committed_docs(
     repository.close()
 
 
-def test_finalization_is_atomic_and_resumable(tmp_path):
+def test_finalization_activation_is_atomic_and_parts_are_resumable(tmp_path):
     corpus = tmp_path / "corpus.txt"
     corpus.write_text("La casa azul\n", encoding="utf-8")
     db_path = tmp_path / "ngrams.duckdb"
@@ -110,28 +110,68 @@ def test_finalization_is_atomic_and_resumable(tmp_path):
     repository._fault_injector = fail_finalization
     with pytest.raises(RuntimeError, match="finalize crash"):
         count_corpus(command_for(corpus), repository)
-    assert (
-        repository._con.execute(
-            "SELECT COUNT(*) FROM ngram_final_v2"
-        ).fetchone()[0]
-        == 0
-    )
+    staged_final_rows = repository._con.execute(
+        "SELECT COUNT(*) FROM ngram_final_v2"
+    ).fetchone()[0]
+    assert staged_final_rows > 0
+    assert repository._con.execute(
+        "SELECT status FROM extraction_datasets"
+    ).fetchone()[0] == "in_progress"
+    assert repository._con.execute(
+        "SELECT COUNT(*) FROM ngram_finalization_parts"
+    ).fetchone()[0] == 16
+    with pytest.raises(RuntimeError, match="not complete"):
+        list(repository.iter_counts(lang="es", corpus="test", min_count=1))
     repository.close()
 
     repository = DuckDbNgramCountRepository(db_path)
     count_corpus(command_for(corpus), repository)
-    assert (
-        repository._con.execute(
-            "SELECT status FROM extraction_datasets"
-        ).fetchone()[0]
-        == "complete"
-    )
-    assert (
-        repository._con.execute(
-            "SELECT COUNT(*) FROM ngram_stage_v2"
-        ).fetchone()[0]
-        == 0
-    )
+    assert repository._con.execute(
+        "SELECT status FROM extraction_datasets"
+    ).fetchone()[0] == "complete"
+    assert repository._con.execute(
+        "SELECT COUNT(*) FROM ngram_stage_v2"
+    ).fetchone()[0] == 0
+    assert repository._con.execute(
+        "SELECT COUNT(*) FROM ngram_final_v2"
+    ).fetchone()[0] == staged_final_rows
+    assert repository._con.execute(
+        "SELECT COUNT(*) FROM ngram_finalization_parts"
+    ).fetchone()[0] == 0
+    repository.close()
+
+
+def test_db_finalization_can_resume_without_the_source_corpus(tmp_path):
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text("La casa azul\nEl camino verde\n", encoding="utf-8")
+    db_path = tmp_path / "ngrams.duckdb"
+    repository = DuckDbNgramCountRepository(db_path)
+    completed_parts = 0
+
+    def fail_third_part(point):
+        nonlocal completed_parts
+        if point == "finalize.after_part_counts":
+            completed_parts += 1
+            if completed_parts == 3:
+                raise RuntimeError("part crash")
+
+    repository._fault_injector = fail_third_part
+    with pytest.raises(RuntimeError, match="part crash"):
+        count_corpus(command_for(corpus), repository)
+    assert repository._con.execute(
+        "SELECT COUNT(*) FROM ngram_finalization_parts"
+    ).fetchone()[0] == 2
+    corpus.unlink()
+
+    rows = repository.resume_finalization(lang="es", corpus="test")
+
+    assert rows > 0
+    assert repository._con.execute(
+        "SELECT status FROM extraction_datasets"
+    ).fetchone()[0] == "complete"
+    assert repository._con.execute(
+        "SELECT COUNT(*) FROM ngram_stage_v2"
+    ).fetchone()[0] == 0
     repository.close()
 
 
@@ -258,6 +298,8 @@ def test_modern_search_reads_finalized_v2_generations(tmp_path):
     assert [(pair.source_text, pair.target_text) for pair in pairs] == [
         ("roda", "a dor")
     ]
+    assert pairs[0].source_dataset_id is not None
+    assert pairs[0].target_dataset_id is not None
 
 
 def test_modern_search_can_select_one_of_multiple_policy_identities(tmp_path):

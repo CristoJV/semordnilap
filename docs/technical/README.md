@@ -43,6 +43,12 @@ artefactos incompletos ni hijos no declarados.
 de corpus. `chunk_id` identifica un segmento determinista. Cambiar una opción
 semántica crea otra identidad y repetir un chunk ya confirmado es un no-op.
 
+La búsqueda exporta un `pair_id` ligado a los alias de corpus y un
+`lexical_pair_id` independiente de ellos. Ambos usan la superficie canónica,
+son insensibles a caja y no dependen de frecuencias ni de `dataset_id`. Los
+IDs de dataset se exportan por separado para conservar la procedencia exacta
+sin impedir comparaciones entre nuevas muestras del mismo corpus.
+
 ## Ventanas y superficie
 
 El extractor recorre spans lexicales Unicode sobre cada documento fuente. Una
