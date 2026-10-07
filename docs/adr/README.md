@@ -20,6 +20,9 @@
 - [ADR 0010](0010-generation-only-schema-v4-and-opt-in-filters.md):
   generation-only schema v4, v3 cleanup migration and opt-in extraction
   filters.
+- [ADR 0011](0011-unrestricted-search-and-reproducible-exports.md):
+  unrestricted search defaults, explicit filters, exact dry runs and
+  reproducible atomic pair exports.
 
 These records describe accepted behavior or mark the decision that superseded
 it. Proposed replacements or migrations belong in

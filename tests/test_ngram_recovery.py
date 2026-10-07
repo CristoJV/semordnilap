@@ -288,8 +288,8 @@ def test_modern_search_reads_finalized_v2_generations(tmp_path):
                 target_lang="pt",
                 source_corpus="wiki",
                 target_corpus="wiki",
-                min_source_count=1,
-                min_target_count=1,
+                filter_min_source_count=1,
+                filter_min_target_count=1,
             )
         )
     )
@@ -336,8 +336,8 @@ def test_modern_search_can_select_one_of_multiple_policy_identities(tmp_path):
                     target_lang="pt",
                     source_corpus="wiki",
                     target_corpus="wiki",
-                    min_source_count=1,
-                    min_target_count=1,
+                    filter_min_source_count=1,
+                    filter_min_target_count=1,
                 )
             )
         )
@@ -348,8 +348,8 @@ def test_modern_search_can_select_one_of_multiple_policy_identities(tmp_path):
                 target_lang="pt",
                 source_corpus="wiki",
                 target_corpus="wiki",
-                min_source_count=1,
-                min_target_count=1,
+                filter_min_source_count=1,
+                filter_min_target_count=1,
                 source_dataset_id=source_dataset_id,
             )
         )

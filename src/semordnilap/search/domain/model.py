@@ -15,17 +15,48 @@ class SearchPolicy:
     target_lang: str
     source_corpus: str
     target_corpus: str
-    min_source_count: int = 3
-    min_target_count: int = 3
-    max_results: int = 0
-    source_n: int = 0
-    target_n: int = 0
-    min_norm_len: int = 0
-    max_norm_len: int = 0
-    include_palindromes: bool = False
-    include_identical_text: bool = False
+    filter_min_source_count: int = 1
+    filter_min_target_count: int = 1
+    filter_max_results: int | None = None
+    filter_source_n: int | None = None
+    filter_target_n: int | None = None
+    filter_min_norm_len: int | None = None
+    filter_max_norm_len: int | None = None
+    filter_exclude_palindromes: bool = False
+    filter_exclude_identical_text: bool = False
+    filter_exclude_punctuation: bool = False
+    filter_exclude_all_stopword_ngrams: bool = False
     source_dataset_id: str | None = None
     target_dataset_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.filter_min_source_count < 1:
+            raise ValueError("filter_min_source_count must be at least 1")
+        if self.filter_min_target_count < 1:
+            raise ValueError("filter_min_target_count must be at least 1")
+        if self.filter_max_results is not None and self.filter_max_results < 1:
+            raise ValueError("filter_max_results must be at least 1")
+        for name, value in (
+            ("filter_source_n", self.filter_source_n),
+            ("filter_target_n", self.filter_target_n),
+        ):
+            if value is not None and value not in {1, 2, 3}:
+                raise ValueError(f"{name} must be one of: 1, 2, 3")
+        for name, value in (
+            ("filter_min_norm_len", self.filter_min_norm_len),
+            ("filter_max_norm_len", self.filter_max_norm_len),
+        ):
+            if value is not None and value < 1:
+                raise ValueError(f"{name} must be at least 1")
+        if (
+            self.filter_min_norm_len is not None
+            and self.filter_max_norm_len is not None
+            and self.filter_min_norm_len > self.filter_max_norm_len
+        ):
+            raise ValueError(
+                "filter_min_norm_len cannot be greater than "
+                "filter_max_norm_len"
+            )
 
 
 @dataclass(frozen=True)

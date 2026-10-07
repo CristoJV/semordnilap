@@ -6,12 +6,15 @@
   mantenimiento.
 - [Extracción moderna de n-gramas](technical/ngram-extraction.md): recorrido
   exacto del dato, tokenización, tablas, transacciones y finalización.
-- [Búsqueda opcional](guides/search.md): consumo de generaciones finales.
+- [Búsqueda de semordnilaps](guides/search.md): primera ejecución, parámetros,
+  consulta, ranking, salida, diagnóstico y mejoras propuestas.
 - [Arquitectura técnica](technical/README.md): componentes y contratos.
 - [ADRs](adr/README.md): decisiones aceptadas.
 - [RFC 0001](rfc/0001-core-pipeline-hardening.md): auditoría y resultado.
 - [ADR del esquema generacional v4](adr/0010-generation-only-schema-v4-and-opt-in-filters.md):
   almacenamiento único, migración y filtros opt-in.
+- [ADR de búsqueda sin restricciones](adr/0011-unrestricted-search-and-reproducible-exports.md):
+  filtros explícitos, dry-run exacto y exportaciones reproducibles.
 
 El flujo de n-gramas soportado es `corpus -> n-gramas textuales`, con la
 búsqueda DuckDB como consumidor opcional. `sp_tag` es una utilidad separada:
